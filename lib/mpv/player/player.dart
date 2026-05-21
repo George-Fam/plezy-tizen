@@ -3,11 +3,12 @@ import 'dart:io' show Platform;
 import '../../media/media_display_criteria.dart';
 import '../models.dart';
 import 'platform/player_android.dart';
+import 'platform/player_linux.dart';
+import 'platform/player_tizen.dart';
+import 'platform/player_windows.dart';
 import 'player_native.dart';
 import 'player_state.dart';
 import 'player_streams.dart';
-import 'platform/player_linux.dart';
-import 'platform/player_windows.dart';
 
 export 'player_base.dart';
 
@@ -245,6 +246,10 @@ abstract class Player {
   /// - true: Use ExoPlayer (default, better hardware support)
   /// - false: Use MPV (more features, ASS subtitle rendering)
   factory Player({bool? useExoPlayer}) {
+    const isTizen = bool.fromEnvironment('TIZEN_BUILD');
+    if (isTizen) {
+      return PlayerTizen();
+    }
     if (Platform.isAndroid) {
       // Default to ExoPlayer on Android, with MPV as fallback
       // The caller should pass useExoPlayer based on SettingsService.getUseExoPlayer()

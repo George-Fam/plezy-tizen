@@ -13,6 +13,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../mpv/mpv.dart';
 import '../mpv/player/platform/player_android.dart';
+import '../mpv/player/platform/player_tizen.dart';
 
 import '../services/scrub_preview_source.dart';
 import '../media/media_backend.dart';
@@ -274,6 +275,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
   TrackManager? _trackManager;
   StreamSubscription<PlayerLog>? _logSubscription;
   StreamSubscription<void>? _sleepTimerSubscription;
+  StreamSubscription<String>? _tizenNativeKeySubscription;
   StreamSubscription<bool>? _mediaControlsPlayingSubscription;
   StreamSubscription<Duration>? _mediaControlsPositionSubscription;
   StreamSubscription<double>? _mediaControlsRateSubscription;
@@ -804,6 +806,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
         if (_bufferingSubscription != null) _bufferingSubscription!.cancel(),
         if (_serverStatusSubscription != null) _serverStatusSubscription!.cancel(),
         if (_playbackRestartSubscription != null) _playbackRestartSubscription!.cancel(),
+        if (_tizenNativeKeySubscription != null) _tizenNativeKeySubscription!.cancel(),
         if (_positionSubscription != null) _positionSubscription!.cancel(),
       ]);
       if (!mounted || player != currentPlayer) return;
@@ -831,6 +834,13 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
 
       if (Platform.isAndroid && useExoPlayer) {
         _backendSwitchedSubscription = currentPlayer.streams.backendSwitched.listen((_) => _onBackendSwitched());
+      }
+
+      // On Tizen the ElmSharp video window intercepts key events before Flutter
+      // sees them. PlayerTizen relays navigation keys via the event channel;
+      // subscribe here to handle back navigation and d-pad from the video window.
+      if (currentPlayer is PlayerTizen) {
+        _tizenNativeKeySubscription = currentPlayer.nativeKeyStream.listen(_onTizenNativeKey);
       }
 
       _bufferingSubscription = currentPlayer.streams.buffering.listen((isBuffering) {
@@ -947,6 +957,17 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
   // via the post-`playbackRestart` fallback. Prevents double-switching.
   bool _frameRateMatchingApplied = false;
 
+  /// Called when the ElmSharp video window intercepts a remote key and relays
+  /// it here via PlayerTizen.nativeKeyStream. Flutter never sees these keys
+  /// directly because the video window has Wayland keyboard focus.
+  void _onTizenNativeKey(String keyName) {
+    switch (keyName) {
+      case 'XF86Back':
+      case 'Back':
+        _handleBackButton();
+    }
+  }
+
   /// Handle back button press
   /// For non-host participants in Watch Together, shows leave session confirmation
   Future<void> _handleBackButton() async {
@@ -1054,6 +1075,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
     _mediaControlsRateSubscription?.cancel();
     _mediaControlsSeekableSubscription?.cancel();
     _serverStatusSubscription?.cancel();
+    _tizenNativeKeySubscription?.cancel();
 
     _autoPlayTimer?.cancel();
     _tvBackgroundMediaControlResumeTimer?.cancel();

@@ -74,7 +74,8 @@ extension _PlexVideoControlsKeyEventMethods on _PlexVideoControlsState {
     // Back key fallback when _focusNode lost focus (TV, or desktop with nav on).
     // Focus.onKeyEvent won't fire if _focusNode lost focus, so handle ESC here.
     if ((_videoPlayerNavigationEnabled || PlatformDetector.isTV()) && event.logicalKey.isBackKey) {
-      if (!_focusNode.hasFocus) {
+      // Tizen can miss Focus.onKeyEvent even when this node appears focused.
+      if (PlatformDetector.isTizen() || !_focusNode.hasFocus) {
         // Skip if an overlay sheet is open — the sheet's FocusScope handles
         // back keys via its own onKeyEvent. Without this check, this global
         // handler would call Navigator.pop() alongside the sheet's handler.

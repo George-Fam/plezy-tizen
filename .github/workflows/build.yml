@@ -755,8 +755,69 @@ jobs:
             plezy-linux-arm64.rpm
             plezy-linux-arm64.pkg.tar.zst
 
+  build-tizen:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+          pub-cache: false
+
+      - name: Setup flutter-tizen
+        run: |
+          git clone https://github.com/flutter-tizen/flutter-tizen.git $HOME/flutter-tizen
+          echo "$HOME/flutter-tizen/bin" >> $GITHUB_PATH
+
+      - name: Setup Tizen .NET SDK
+        run: |
+          wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo apt-get install -y dotnet-sdk-8.0
+
+      - name: Cache Pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-pub-v2-${{ hashFiles('pubspec.yaml', 'pubspec.lock') }}
+
+      - name: Install dependencies
+        run: flutter-tizen pub get --enforce-lockfile --no-example
+
+      - name: Build Tizen TPK
+        env:
+          TIZEN_AUTHOR_CERT_BASE64: ${{ secrets.TIZEN_AUTHOR_CERT_BASE64 }}
+          TIZEN_AUTHOR_CERT_PASSWORD: ${{ secrets.TIZEN_AUTHOR_CERT_PASSWORD }}
+          TIZEN_DIST_CERT_BASE64: ${{ secrets.TIZEN_DIST_CERT_BASE64 }}
+          TIZEN_DIST_CERT_PASSWORD: ${{ secrets.TIZEN_DIST_CERT_PASSWORD }}
+        run: bash tizen/scripts/build_tizen.sh ${{ env.GIT_COMMIT_DART_DEFINE }} ${{ env.DONATIONS_DART_DEFINE }}
+
+      - name: Rename TPK
+        run: cp build/tizen/tpk/*.tpk plezy-tizen.tpk
+
+      - name: Attest TPK
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: plezy-tizen.tpk
+
+      - name: Upload TPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizen-tpk
+          path: plezy-tizen.tpk
+
   create-release:
-    needs: [build-android, build-ios, build-macos, package-windows, build-linux-x64, build-linux-arm64]
+    needs: [build-android, build-ios, build-macos, package-windows, build-linux-x64, build-linux-arm64, build-tizen]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -813,6 +874,12 @@ jobs:
         with:
           name: linux-arm64
           path: artifacts/linux-arm64
+
+      - name: Download Tizen artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tizen-tpk
+          path: artifacts/tizen-tpk
 
       - name: Display structure of downloaded files
         run: ls -R artifacts
@@ -909,6 +976,7 @@ jobs:
             artifacts/windows-installer/plezy-windows-installer.exe
             artifacts/linux-x64/*
             artifacts/linux-arm64/*
+            artifacts/tizen-tpk/plezy-tizen.tpk
             appcast.xml
           draft: true
           prerelease: false
