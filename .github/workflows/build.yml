@@ -802,7 +802,6 @@ jobs:
 
   build-tizen:
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       id-token: write
       attestations: write
