@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import '../../media/media_display_criteria.dart';
+import '../../utils/platform_detector.dart';
 import '../models.dart';
 import 'platform/player_android.dart';
 import 'platform/player_linux.dart';
@@ -253,8 +254,7 @@ abstract class Player {
   /// - true: Use ExoPlayer (default, better hardware support)
   /// - false: Use MPV (more features, ASS subtitle rendering)
   factory Player({bool? useExoPlayer}) {
-    const isTizen = bool.fromEnvironment('TIZEN_BUILD');
-    if (isTizen) {
+    if (PlatformDetector.isTizen()) {
       return PlayerTizen();
     }
     if (Platform.isAndroid) {
