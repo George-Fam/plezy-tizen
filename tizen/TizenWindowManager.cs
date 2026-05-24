@@ -20,6 +20,13 @@ namespace Runner
     ///   isAlwaysOnTop               - false (concept does not exist on TV)
     ///   isMinimized                 - false
     ///   All setters / listeners     - no-op (TV window state is fixed by OS)
+    ///
+    /// TODO: now that this stub is in place, remove the now-redundant isTizen()
+    /// guards from Dart code:
+    ///   - fullscreen_state_manager.dart  (toggleFullscreen / enter / exit)
+    ///   - visibility.dart                (_exitFullscreenIfNeeded, _initAlwaysOnTopState,
+    ///                                     _updateTrafficLightVisibility)
+    ///   - main.dart                      (windowManager.ensureInitialized guard)
     /// </summary>
     internal class TizenWindowManager
     {
