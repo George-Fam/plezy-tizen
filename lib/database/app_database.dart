@@ -10,6 +10,7 @@ import 'tables.dart';
 import '../models/download_models.dart';
 import '../utils/app_logger.dart';
 import '../utils/global_key_utils.dart';
+import '../utils/platform_detector.dart';
 
 part 'app_database.g.dart';
 
@@ -561,8 +562,7 @@ LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     // Tizen doesnt expose libsqlite3.so; route through sqflite_tizen which
     // wraps Tizen's internal SQLite via the app-data API.
-    const isTizen = bool.fromEnvironment('TIZEN_BUILD');
-    if (isTizen) {
+    if (PlatformDetector.isTizen()) {
       return SqfliteQueryExecutor(path: 'plezy.db', logStatements: false);
     }
 

@@ -268,7 +268,6 @@ namespace Runner
             var audioTracks = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
             var embeddedSubtitleTracks = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
             // PlayerTrackInfo exposes no Count — enumerate by index until GetLanguageCode throws.
-            // PlayerTrackInfo exposes no Count — enumerate by index until GetLanguageCode throws.
             try
             {
                 var info = _player.AudioTrackInfo;
