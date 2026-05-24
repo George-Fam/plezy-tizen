@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Threading.Tasks;
+using ElmSharp;
 using Tizen.Flutter.Embedding;
 
 namespace Runner
@@ -21,15 +22,21 @@ namespace Runner
     ///   isMinimized                 - false
     ///   All setters / listeners     - no-op (TV window state is fixed by OS)
     ///
-    /// TODO: now that this stub is in place, remove the now-redundant isTizen()
-    /// guards from Dart code:
-    ///   - fullscreen_state_manager.dart  (toggleFullscreen / enter / exit)
-    ///   - visibility.dart                (_exitFullscreenIfNeeded, _initAlwaysOnTopState,
-    ///                                     _updateTrafficLightVisibility)
-    ///   - main.dart                      (windowManager.ensureInitialized guard)
+    /// getSize returns the actual screen resolution via Elementary.GetScreenSize()
+    /// so 4K TVs report 3840×2160 rather than a hardcoded 1920×1080.
     /// </summary>
     internal class TizenWindowManager
     {
+        private readonly int _screenWidth;
+        private readonly int _screenHeight;
+
+        public TizenWindowManager()
+        {
+            var size = Elementary.GetScreenSize();
+            _screenWidth  = size.Width;
+            _screenHeight = size.Height;
+        }
+
         public void Setup()
         {
             var channel = new MethodChannel("window_manager");
@@ -42,7 +49,7 @@ namespace Runner
             return Task.FromResult(result);
         }
 
-        private static object Respond(string method)
+        private object Respond(string method)
         {
             // Boolean queries — TV is always fullscreen, maximized, focused, visible.
             if (method == "isFullScreen") return true;
@@ -62,9 +69,9 @@ namespace Runner
             if (method == "getTitleBarHeight") return 0;
             if (method == "getTitle") return "Plezy";
 
-            // Size/position — TV is fixed at 1920x1080.
+            // Size/position — queried from the actual screen at startup.
             if (method == "getSize")
-                return new Hashtable { { "width", 1920.0 }, { "height", 1080.0 } };
+                return new Hashtable { { "width", (double)_screenWidth }, { "height", (double)_screenHeight } };
             if (method == "getPosition")
                 return new Hashtable { { "x", 0.0 }, { "y", 0.0 } };
 

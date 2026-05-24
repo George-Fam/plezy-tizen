@@ -29,8 +29,9 @@ namespace Runner
                 // ElmSharp window never steals keyboard focus from Flutter's
                 // DALi window. The player calls Show() via the open command.
                 videoWindow = new Window("plezy-video");
-                videoWindow.Resize(1920, 1080);
-                Console.WriteLine("[App] Video window created");
+                var screenSize = Elementary.GetScreenSize();
+                videoWindow.Resize(screenSize.Width, screenSize.Height);
+                Console.WriteLine($"[App] Video window created ({screenSize.Width}x{screenSize.Height})");
             }
             catch (Exception e)
             {
