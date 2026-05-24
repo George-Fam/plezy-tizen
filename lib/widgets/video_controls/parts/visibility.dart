@@ -252,7 +252,6 @@ extension _PlexVideoControlsVisibilityMethods on _PlexVideoControlsState {
   }
 
   void _updateTrafficLightVisibility() async {
-    if (!Platform.isMacOS) return;
     final generation = ++_trafficLightVisibilityGeneration;
     // When maximized or fullscreen, always keep traffic lights visible so the
     // user can reach them without the controls-hide-on-mouse-leave race.
