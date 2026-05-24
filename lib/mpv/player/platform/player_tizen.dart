@@ -219,6 +219,8 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
 
   /// Called by the Video widget whenever layout changes.
   /// Forwards the physical-pixel rect to the native MediaView.
+  /// Coordinates are already in physical pixels (logical × dpr done by the
+  /// caller); SetRoi on the C# side uses them directly — no further scaling.
   @override
   Future<void> setVideoRect({
     required int left,
@@ -234,7 +236,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         'top': top,
         'right': right,
         'bottom': bottom,
-        'devicePixelRatio': devicePixelRatio,
+        // devicePixelRatio intentionally omitted: C# uses physical pixels directly.
       });
     } catch (e) {
       appLogger.w('PlayerTizen: setVideoRect failed', error: e);

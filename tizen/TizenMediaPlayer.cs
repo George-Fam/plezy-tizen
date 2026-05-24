@@ -538,11 +538,12 @@ namespace Runner
             if (_player == null || _videoWindow == null || args == null) return;
             try
             {
-                double dpr = Convert.ToDouble(args["devicePixelRatio"]);
-                int left = (int)(Convert.ToInt32(args["left"]) / dpr);
-                int top = (int)(Convert.ToInt32(args["top"]) / dpr);
-                int right = (int)(Convert.ToInt32(args["right"]) / dpr);
-                int bottom = (int)(Convert.ToInt32(args["bottom"]) / dpr);
+                // Coordinates arrive as physical pixels (Dart already multiplied by dpr).
+                // Pass them straight to SetRoi — no further scaling needed.
+                int left   = Convert.ToInt32(args["left"]);
+                int top    = Convert.ToInt32(args["top"]);
+                int right  = Convert.ToInt32(args["right"]);
+                int bottom = Convert.ToInt32(args["bottom"]);
 
                 // OriginalOrFull is required by the Tizen API to enable SetRoi.
                 // Re-apply _currentDisplayMode afterward so a user-set mode is not lost.
