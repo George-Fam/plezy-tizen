@@ -701,14 +701,18 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   }
 
   /// Fetches text content from a file:// or HTTP URI.
+  /// A 15-second timeout is applied to the connection and response so a stalled
+  /// network doesn't leave the subtitle load suspended indefinitely.
   Future<String> _fetchText(String uri) async {
     if (uri.startsWith('file://')) {
       return File(uri.replaceFirst('file://', '')).readAsString();
     }
     final client = HttpClient();
     try {
-      final request = await client.getUrl(Uri.parse(uri));
-      final response = await request.close();
+      final request = await client
+          .getUrl(Uri.parse(uri))
+          .timeout(const Duration(seconds: 15));
+      final response = await request.close().timeout(const Duration(seconds: 15));
       final bytes = <int>[];
       await for (final chunk in response) {
         bytes.addAll(chunk);
