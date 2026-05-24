@@ -248,6 +248,20 @@ class _LiveTvScreenState extends State<LiveTvScreen>
     return _extractEnabledChannelKeys(matching.isNotEmpty ? matching : serverInfo.dvrs);
   }
 
+  String? _sourceTitleForServerInfo(LiveTvServerInfo serverInfo) {
+    for (final dvr in serverInfo.dvrs) {
+      if (dvr.key == serverInfo.dvrKey) {
+        return _nonEmpty(dvr.lineupTitle) ?? _nonEmpty(dvr.lineupURL) ?? _nonEmpty(dvr.lineup);
+      }
+    }
+    return _nonEmpty(serverInfo.lineup);
+  }
+
+  String? _nonEmpty(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
   Future<void> _loadChannels() async {
     if (!mounted) return;
     setState(() {
@@ -296,6 +310,7 @@ class _LiveTvScreenState extends State<LiveTvScreen>
 
           final liveTv = genericClient.liveTv;
           final source = await liveTv.buildFavoriteChannelSource(lineup: serverInfo.lineup);
+          final sourceTitle = _sourceTitleForServerInfo(serverInfo);
           final storeKey = liveTv.favoriteStoreKey;
           final liveServerKey = _liveServerScopeKey(serverInfo);
           _favoriteSourceByLiveServer[liveServerKey] = source;
@@ -314,6 +329,7 @@ class _LiveTvScreenState extends State<LiveTvScreen>
             if (enabledKeys != null && !enabledKeys.contains(channel.key)) continue;
             final scopedChannel = channel.copyWith(
               liveDvrKey: serverInfo.dvrKey,
+              liveTvSourceTitle: sourceTitle,
               favoriteSource: source,
               favoriteStoreKey: storeKey,
             );

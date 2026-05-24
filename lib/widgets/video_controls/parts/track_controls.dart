@@ -28,44 +28,32 @@ extension _PlexVideoControlsTrackMethods on _PlexVideoControlsState {
     final shaderService = widget.shaderService;
     if (shaderService == null || !shaderService.isSupported) return;
 
-    if (shaderService.currentPreset.isEnabled) {
-      // Currently active - disable temporarily
-      unawaited(
-        shaderService
-            .applyPreset(ShaderPreset.none)
-            .then((_) {
-              if (!mounted) return;
-              // ignore: no-empty-block - setState triggers rebuild to reflect disabled shader
-              _setControlsState(() {});
-              widget.onShaderChanged?.call();
-            })
-            .catchError((Object e, StackTrace st) {
-              appLogger.w('Failed to disable shader', error: e, stackTrace: st);
-            }),
-      );
-    } else {
-      // Currently off - restore saved preset
-      final shaderProvider = context.read<ShaderProvider>();
-      final saved = shaderProvider.savedPreset;
-      final allPresets = shaderProvider.allPresets;
-      final targetPreset = saved.isEnabled
-          ? saved
-          : allPresets.firstWhere((p) => p.isEnabled, orElse: () => allPresets[1]);
-      unawaited(
-        shaderService
-            .applyPreset(targetPreset)
-            .then((_) {
-              if (!mounted) return;
-              shaderProvider.setCurrentPreset(targetPreset);
-              // ignore: no-empty-block - setState triggers rebuild to reflect restored shader
-              _setControlsState(() {});
-              widget.onShaderChanged?.call();
-            })
-            .catchError((Object e, StackTrace st) {
-              appLogger.w('Failed to apply shader preset', error: e, stackTrace: st);
-            }),
-      );
+    final shaderProvider = context.read<ShaderProvider>();
+    final targetPreset = resolveShaderTogglePreset(
+      currentPreset: shaderService.currentPreset,
+      savedPreset: shaderProvider.savedPreset,
+      allPresets: shaderProvider.allPresets,
+    );
+
+    if (targetPreset.isEnabled && widget.isAmbientLightingEnabled) {
+      widget.onToggleAmbientLighting?.call();
     }
+
+    unawaited(
+      shaderService
+          .applyPreset(targetPreset)
+          .then((_) async {
+            if (!mounted) return;
+            await shaderProvider.setPreset(targetPreset);
+            if (!mounted) return;
+            // ignore: no-empty-block - setState triggers rebuild to reflect shader changes
+            _setControlsState(() {});
+            widget.onShaderChanged?.call();
+          })
+          .catchError((Object e, StackTrace st) {
+            appLogger.w('Failed to toggle shader preset', error: e, stackTrace: st);
+          }),
+    );
   }
 
   void _nextAudioTrack() {
@@ -93,7 +81,11 @@ extension _PlexVideoControlsTrackMethods on _PlexVideoControlsState {
       isTranscoding: widget.isTranscoding,
       sourceAudioTracks: widget.sourceAudioTracks,
       selectedAudioStreamId: widget.selectedAudioStreamId,
+      sourceSubtitleTracks: widget.sourceSubtitleTracks,
+      selectedSubtitleStreamId: widget.selectedSubtitleStreamId,
     );
+    final canSwitchSourceSubtitles =
+        versionQuality.canSwitch && versionQuality.isTranscoding && widget.metadata.backend == MediaBackend.plex;
     return TrackControlsState(
       availableVersions: versionQuality.availableVersions,
       selectedMediaIndex: widget.selectedMediaIndex,
@@ -102,6 +94,11 @@ extension _PlexVideoControlsTrackMethods on _PlexVideoControlsState {
       isTranscoding: versionQuality.isTranscoding,
       sourceAudioTracks: versionQuality.sourceAudioTracks,
       selectedAudioStreamId: versionQuality.selectedAudioStreamId,
+      sourceSubtitleTracks: canSwitchSourceSubtitles
+          ? versionQuality.sourceSubtitleTracks
+          : const <MediaSubtitleTrack>[],
+      selectedSubtitleStreamId: canSwitchSourceSubtitles ? versionQuality.selectedSubtitleStreamId : null,
+      sourcePartId: canSwitchSourceSubtitles ? widget.sourcePartId : null,
       sourceDurationMs: widget.metadata.durationMs,
       boxFitMode: widget.boxFitMode,
       audioSyncOffset: _audioSyncOffset,
@@ -119,6 +116,9 @@ extension _PlexVideoControlsTrackMethods on _PlexVideoControlsState {
       onSwitchVersion: versionQuality.canSwitch ? (i) => _switchVersionAndQuality(newMediaIndex: i) : null,
       onSwitchQualityPreset: versionQuality.canSwitch ? (p) => _switchVersionAndQuality(newPreset: p) : null,
       onSwitchAudioStreamId: versionQuality.canSwitch ? (id) => _switchVersionAndQuality(newAudioStreamId: id) : null,
+      onSwitchSubtitleStreamId: canSwitchSourceSubtitles
+          ? (id) => _switchVersionAndQuality(newSubtitleStreamId: id)
+          : null,
       onAudioTrackChanged: widget.onAudioTrackChanged,
       onSubtitleTrackChanged: _onSubtitleTrackChanged,
       onSecondarySubtitleTrackChanged: widget.onSecondarySubtitleTrackChanged,
@@ -177,6 +177,7 @@ extension _PlexVideoControlsTrackMethods on _PlexVideoControlsState {
       chapters: _chapters,
       chaptersLoaded: _chaptersLoaded,
       trackControlsState: trackControlsState,
+      onSeekRequested: widget.onSeekRequested,
       onSeekCompleted: widget.onSeekCompleted,
       hideChaptersAndQueue: hideChaptersAndQueue,
     );

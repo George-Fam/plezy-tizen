@@ -7,6 +7,7 @@ import QuartzCore
   import UIKit
 #elseif os(macOS)
   import Cocoa
+  import Metal
 #endif
 
 protocol MpvPlayerDelegate: AnyObject {
@@ -278,6 +279,7 @@ class MpvPlayerCoreBase: NSObject {
   func setupMpv() -> Bool {
     #if os(macOS)
       guard let renderLayer = metalLayer else { return false }
+      configureMoltenVKPlacementHeaps()
     #else
       guard let renderLayer = videoLayer else { return false }
     #endif
@@ -415,7 +417,7 @@ class MpvPlayerCoreBase: NSObject {
 
     setRawStringPropertyAsync(
       "target-colorspace-hint",
-      value: enabled ? "yes" : "no",
+      value: enabled ? "auto" : "no",
       completion: completion ?? { _ in }
     )
 
@@ -588,14 +590,24 @@ class MpvPlayerCoreBase: NSObject {
         checkError(mpv_set_option_string(mpv, "avfoundation-composite-osd", "no"))
         checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))
       #else
-        checkError(mpv_set_option_string(mpv, "avfoundation-composite-osd", "yes"))
+        checkError(mpv_set_option_string(mpv, "avfoundation-composite-osd", "no"))
         checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))
       #endif
     #endif
     checkError(mpv_set_option_string(mpv, "hwdec-codecs", "all"))
     checkError(mpv_set_option_string(mpv, "hwdec-software-fallback", "yes"))
-    checkError(mpv_set_option_string(mpv, "target-colorspace-hint", "yes"))
+    checkError(mpv_set_option_string(mpv, "target-colorspace-hint", "auto"))
   }
+
+  #if os(macOS)
+    private func configureMoltenVKPlacementHeaps() {
+      guard let device = MTLCreateSystemDefaultDevice() else { return }
+      let supportsPlacementHeaps = device.supportsFamily(.apple2) || device.supportsFamily(.mac2)
+      if !supportsPlacementHeaps {
+        setenv("MVK_CONFIG_USE_MTLHEAP", "0", 1)
+      }
+    }
+  #endif
 
   private func isManagedRendererProperty(_ name: String) -> Bool {
     name == "vo" || name == "wid" || name == "gpu-api" || name == "gpu-context"

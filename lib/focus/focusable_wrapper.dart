@@ -2,10 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../widgets/clickable_cursor.dart';
+import '../utils/text_input_diagnostics.dart';
 import 'dpad_navigator.dart';
 import 'focus_theme.dart';
 import 'input_mode_tracker.dart';
 import 'key_event_utils.dart';
+
+String _describeFocusableKey(KeyEvent event) {
+  return 'type=${event.runtimeType} logical=${event.logicalKey.keyLabel}/${event.logicalKey.keyId} '
+      'physical=${event.physicalKey.usbHidUsage} deviceType=${event.deviceType} character=${event.character}';
+}
+
+void _logFocusableWrapper(String message) {
+  TextInputDiagnostics.log('FocusableWrapper', message);
+}
 
 /// A wrapper widget that makes its child focusable with D-pad navigation support.
 ///
@@ -70,7 +82,7 @@ class FocusableWrapper extends StatefulWidget {
   /// Whether the wrapper can receive focus.
   final bool canRequestFocus;
 
-  /// Custom key event handler. Return KeyEventResult.handled to consume the event.
+  /// Custom key event handler. Return any non-ignored result to stop default handling.
   /// This is called before the default key handling.
   final KeyEventResult Function(FocusNode node, KeyEvent event)? onKeyEvent;
 
@@ -315,23 +327,34 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     final key = event.logicalKey;
+    KeyEventResult finish(KeyEventResult result, String reason) {
+      _logFocusableWrapper(
+        'node=${node.debugLabel} result=$result reason=$reason key=(${_describeFocusableKey(event)}) '
+        'onNav(up=${widget.onNavigateUp != null},down=${widget.onNavigateDown != null},'
+        'left=${widget.onNavigateLeft != null},right=${widget.onNavigateRight != null}) '
+        'onSelect=${widget.onSelect != null} onBack=${widget.onBack != null}',
+      );
+      return result;
+    }
+
+    _logFocusableWrapper('node=${node.debugLabel} received key=(${_describeFocusableKey(event)})');
 
     if (SelectKeyUpSuppressor.consumeIfSuppressed(event)) {
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'select-key-up-suppressed');
     }
 
     // Call custom key handler first
     if (widget.onKeyEvent != null) {
       final result = widget.onKeyEvent!(node, event);
-      if (result == KeyEventResult.handled) {
-        return result;
+      if (result != KeyEventResult.ignored) {
+        return finish(result, 'custom-onKeyEvent');
       }
     }
 
     if (widget.onBack != null) {
       final backResult = handleBackKeyAction(event, widget.onBack!);
       if (backResult != KeyEventResult.ignored) {
-        return backResult;
+        return finish(backResult, 'onBack');
       }
     }
 
@@ -351,10 +374,10 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
               }
             });
           }
-          return KeyEventResult.handled;
+          return finish(KeyEventResult.handled, 'select-long-press-down');
         } else if (event is KeyRepeatEvent) {
           // Consume repeat events to prevent system sounds
-          return KeyEventResult.handled;
+          return finish(KeyEventResult.handled, 'select-long-press-repeat');
         } else if (event is KeyUpEvent) {
           final timerWasActive = _longPressTimer?.isActive ?? false;
           _longPressTimer?.cancel();
@@ -364,52 +387,52 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
           }
           // If timer already fired, long press was triggered - do nothing on key up
           _isSelectKeyDown = false;
-          return KeyEventResult.handled;
+          return finish(KeyEventResult.handled, 'select-long-press-up');
         }
       } else if (widget.onSelect != null) {
-        return handleOneShotSelect(event, widget.onSelect!);
+        return finish(handleOneShotSelect(event, widget.onSelect!), 'one-shot-select');
       }
     }
 
     // Ignore key up events for other keys
     if (!event.isActionable) {
-      return KeyEventResult.ignored;
+      return finish(KeyEventResult.ignored, 'non-actionable');
     }
 
     // Context menu key
     if (key.isContextMenuKey) {
       SelectKeyUpSuppressor.suppressSelectUntilKeyUp();
       widget.onLongPress?.call();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'context-menu');
     }
 
     // UP arrow - if callback provided, navigate up
     if (key == LogicalKeyboardKey.arrowUp && widget.onNavigateUp != null) {
       widget.onNavigateUp!();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'onNavigateUp');
     }
 
     // DOWN arrow - if callback provided, navigate down
     if (key == LogicalKeyboardKey.arrowDown && widget.onNavigateDown != null) {
       widget.onNavigateDown!();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'onNavigateDown');
     }
 
     // LEFT arrow - if callback provided, navigate left (caller is responsible
     // for only providing this callback when the item is at the left edge)
     if (key == LogicalKeyboardKey.arrowLeft && widget.onNavigateLeft != null) {
       widget.onNavigateLeft!();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'onNavigateLeft');
     }
 
     // RIGHT arrow - if callback provided, navigate right (caller is responsible
     // for only providing this callback when the item is at the right edge)
     if (key == LogicalKeyboardKey.arrowRight && widget.onNavigateRight != null) {
       widget.onNavigateRight!();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'onNavigateRight');
     }
 
-    return KeyEventResult.ignored;
+    return finish(KeyEventResult.ignored, 'fall-through');
   }
 
   @override
@@ -459,6 +482,10 @@ class _FocusableWrapperState extends State<FocusableWrapper> with SingleTickerPr
     // Add semantics if label provided
     if (widget.semanticLabel != null) {
       result = Semantics(label: widget.semanticLabel, button: widget.onSelect != null, child: result);
+    }
+
+    if (widget.onSelect != null || widget.onLongPress != null) {
+      result = ClickableCursor(child: result);
     }
 
     return result;

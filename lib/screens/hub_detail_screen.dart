@@ -2,15 +2,20 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import '../media/library_query.dart';
+import '../media/media_backend.dart';
 import '../media/media_hub.dart';
 import '../media/media_item.dart';
+import '../media/media_server_client.dart';
 import '../media/media_sort.dart';
 import '../services/settings_service.dart';
 import '../widgets/settings_builder.dart';
 import '../utils/app_logger.dart';
 import '../utils/grid_size_calculator.dart';
+import '../utils/platform_detector.dart';
 import '../utils/provider_extensions.dart';
 import '../widgets/focusable_media_card.dart';
+import '../widgets/ios_status_bar_tap_scroll_to_top.dart';
 import '../widgets/media_grid_delegate.dart';
 import '../widgets/desktop_app_bar.dart';
 import '../widgets/loading_indicator_box.dart';
@@ -45,13 +50,20 @@ class HubDetailScreen extends StatefulWidget {
 
 class _HubDetailScreenState extends State<HubDetailScreen>
     with Refreshable, GridFocusNodeMixin, FocusableDetailScreenMixin {
+  static const int _pageSize = 200;
+
   List<MediaItem> _items = [];
   List<MediaItem> _filteredItems = [];
   List<MediaSort> _sortOptions = [];
   MediaSort? _selectedSort;
   bool _isSortDescending = false;
   bool _isLoading = false;
+  bool _isLoadingMore = false;
   String? _errorMessage;
+  String? _continuationErrorMessage;
+  int? _continuationOffset;
+  int? _continuationTotal;
+  int _loadGeneration = 0;
 
   /// Key for getting a context below OverlaySheetHost
   final GlobalKey _overlayChildKey = GlobalKey();
@@ -200,31 +212,48 @@ class _HubDetailScreenState extends State<HubDetailScreen>
 
   void _showSortBottomSheet() {
     final overlayContext = _overlayChildKey.currentContext ?? context;
-    OverlaySheetController.of(overlayContext).show(
-      builder: (context) => SortBottomSheet(
-        sortOptions: _sortOptions,
-        selectedSort: _selectedSort,
-        isSortDescending: _isSortDescending,
-        onSortChanged: (sort, descending) {
-          setState(() {
-            _selectedSort = sort;
-            _isSortDescending = descending;
+    MediaSort? pendingSort = _selectedSort;
+    bool pendingDescending = _isSortDescending;
+    bool pendingCleared = false;
+    OverlaySheetController.of(overlayContext)
+        .show(
+          builder: (context) => SortBottomSheet(
+            sortOptions: _sortOptions,
+            selectedSort: _selectedSort,
+            isSortDescending: _isSortDescending,
+            onSortChanged: (sort, descending) {
+              pendingSort = sort;
+              pendingDescending = descending;
+              pendingCleared = false;
+            },
+            onClear: () {
+              pendingSort = null;
+              pendingDescending = false;
+              pendingCleared = true;
+            },
+          ),
+        )
+        .then((_) {
+          if (!mounted) return;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (pendingCleared) {
+              _selectedSort = null;
+              _isSortDescending = false;
+              _applySort();
+            } else if (pendingSort != null &&
+                (pendingSort!.key != _selectedSort?.key || pendingDescending != _isSortDescending)) {
+              _selectedSort = pendingSort;
+              _isSortDescending = pendingDescending;
+              _applySort();
+            }
           });
-          _applySort();
-        },
-        onClear: () {
-          setState(() {
-            _selectedSort = null;
-            _isSortDescending = false;
-          });
-          _applySort();
-        },
-      ),
-    );
+        });
   }
 
   Future<void> _loadMoreItems() async {
     if (_isLoading) return;
+    final generation = ++_loadGeneration;
 
     final serverId = widget.hub.serverId;
     if (widget.loadItems == null && serverId == null) {
@@ -234,23 +263,33 @@ class _HubDetailScreenState extends State<HubDetailScreen>
 
     setState(() {
       _isLoading = true;
+      _isLoadingMore = false;
       _errorMessage = null;
+      _continuationErrorMessage = null;
+      _continuationOffset = null;
+      _continuationTotal = null;
     });
 
     try {
       final loader = widget.loadItems;
       final client = serverId == null ? null : context.tryGetMediaClientForServer(serverId);
-      var items = loader == null
-          ? (client == null ? const <MediaItem>[] : await client.fetchMoreHubItems(widget.hub.id))
-          : await loader();
-
-      // Filter to specific library if this hub was split from a multi-library hub
-      final sectionFilter = int.tryParse(widget.hub.libraryId ?? '');
-      if (sectionFilter != null) {
-        items = items.where((item) => int.tryParse(item.libraryId ?? '') == sectionFilter).toList();
+      final List<MediaItem> items;
+      int totalCount;
+      int loadedCount;
+      if (loader == null) {
+        final page = client == null
+            ? const LibraryPage<MediaItem>(items: [], totalCount: 0)
+            : await client.fetchMoreHubItemsPage(widget.hub.id, start: 0, size: _pageSize);
+        items = _applySectionFilter(page.items);
+        totalCount = page.totalCount;
+        loadedCount = page.items.length;
+      } else {
+        items = _applySectionFilter(await loader());
+        totalCount = items.length;
+        loadedCount = items.length;
       }
 
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _items = items;
         _filteredItems = items;
@@ -258,6 +297,13 @@ class _HubDetailScreenState extends State<HubDetailScreen>
       });
 
       _applySort();
+      if (loader == null && client != null && loadedCount < totalCount) {
+        if (client.backend == MediaBackend.plex) {
+          unawaited(_loadFullHubContent(client, generation));
+        } else {
+          unawaited(_loadRemainingHubPages(client, generation, loadedCount, totalCount));
+        }
+      }
 
       appLogger.d('Loaded ${items.length} items for hub: ${widget.hub.title}');
     } catch (e) {
@@ -268,6 +314,106 @@ class _HubDetailScreenState extends State<HubDetailScreen>
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadFullHubContent(MediaServerClient client, int generation) async {
+    if (mounted && generation == _loadGeneration) {
+      setState(() {
+        _isLoadingMore = true;
+        _continuationErrorMessage = null;
+      });
+    }
+
+    try {
+      final items = _applySectionFilter(await client.fetchMoreHubItems(widget.hub.id));
+      if (!mounted || generation != _loadGeneration) return;
+      if (items.isEmpty && _items.isNotEmpty) {
+        throw StateError('Hub continuation returned no items');
+      }
+      setState(() {
+        _items = items;
+        _filteredItems = items;
+        _isLoadingMore = false;
+        _continuationErrorMessage = null;
+        _continuationOffset = null;
+        _continuationTotal = null;
+      });
+      _applySort();
+    } catch (e, st) {
+      appLogger.w('Failed to finish loading hub content', error: e, stackTrace: st);
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _isLoadingMore = false;
+        _continuationErrorMessage = t.messages.errorLoading(error: e.toString());
+      });
+    }
+  }
+
+  Future<void> _loadRemainingHubPages(MediaServerClient client, int generation, int startOffset, int totalCount) async {
+    var offset = startOffset;
+    var total = totalCount;
+    if (mounted && generation == _loadGeneration) {
+      setState(() {
+        _isLoadingMore = true;
+        _continuationErrorMessage = null;
+        _continuationOffset = offset;
+        _continuationTotal = total;
+      });
+    }
+    try {
+      while (offset < total) {
+        final page = await client.fetchMoreHubItemsPage(widget.hub.id, start: offset, size: _pageSize);
+        if (!mounted || generation != _loadGeneration) return;
+        if (page.items.isEmpty) break;
+        final items = _applySectionFilter(page.items);
+        setState(() {
+          _items.addAll(items);
+          _filteredItems = List.of(_items);
+        });
+        _applySort();
+        offset += page.items.length;
+        total = page.totalCount;
+        _continuationOffset = offset;
+        _continuationTotal = total;
+      }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _isLoadingMore = false;
+        _continuationErrorMessage = null;
+        _continuationOffset = null;
+        _continuationTotal = null;
+      });
+    } catch (e, st) {
+      appLogger.w('Failed to finish loading hub content', error: e, stackTrace: st);
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _isLoadingMore = false;
+        _continuationErrorMessage = t.messages.errorLoading(error: e.toString());
+        _continuationOffset = offset;
+        _continuationTotal = total;
+      });
+    }
+  }
+
+  void _retryHubContinuation() {
+    final serverId = widget.hub.serverId;
+    final client = serverId == null ? null : context.tryGetMediaClientForServer(serverId);
+    if (client == null || _isLoadingMore) return;
+    final generation = _loadGeneration;
+    if (client.backend == MediaBackend.plex) {
+      unawaited(_loadFullHubContent(client, generation));
+      return;
+    }
+    final offset = _continuationOffset;
+    final total = _continuationTotal;
+    if (offset == null || total == null) return;
+    unawaited(_loadRemainingHubPages(client, generation, offset, total));
+  }
+
+  List<MediaItem> _applySectionFilter(List<MediaItem> items) {
+    final sectionFilter = int.tryParse(widget.hub.libraryId ?? '');
+    if (sectionFilter == null) return items;
+    return items.where((item) => int.tryParse(item.libraryId ?? '') == sectionFilter).toList();
   }
 
   Future<void> _handleItemRefresh(String ratingKey) async {
@@ -302,6 +448,27 @@ class _HubDetailScreenState extends State<HubDetailScreen>
     unawaited(_loadMoreItems());
   }
 
+  Widget _buildContinuationStatusSliver() {
+    final error = _continuationErrorMessage;
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: error == null
+              ? const CircularProgressIndicator()
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(error, textAlign: TextAlign.center),
+                    const SizedBox(height: 8),
+                    TextButton(onPressed: _retryHubContinuation, child: Text(t.common.retry)),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+
   @override
   void refresh() {
     _loadMoreItems();
@@ -310,7 +477,7 @@ class _HubDetailScreenState extends State<HubDetailScreen>
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false,
+      canPop: PlatformDetector.isHandheldIOS(context),
       onPopInvokedWithResult: (didPop, _) {
         if (BackKeyCoordinator.consumeIfHandled()) return;
         if (didPop) return;
@@ -319,125 +486,135 @@ class _HubDetailScreenState extends State<HubDetailScreen>
           Navigator.pop(context);
         }
       },
-      child: OverlaySheetHost(
-        child: Scaffold(
-          key: _overlayChildKey,
-          body: CustomScrollView(
-            controller: scrollController,
-            clipBehavior: Clip.none,
-            slivers: [
-              CustomAppBar(title: Text(widget.hub.title), pinned: true, actions: buildFocusableAppBarActions()),
-              if (_errorMessage != null)
-                SliverErrorState(message: _errorMessage!, onRetry: _loadMoreItems)
-              else if (_filteredItems.isEmpty && _isLoading)
-                LoadingIndicatorBox.sliver
-              else if (_filteredItems.isEmpty)
-                SliverFillRemaining(child: Center(child: Text(t.hubDetail.noItemsFound)))
-              else
-                SettingsBuilder(
-                  prefs: const [
-                    SettingsService.viewMode,
-                    SettingsService.episodePosterMode,
-                    SettingsService.libraryDensity,
-                  ],
-                  builder: (context) {
-                    final svc = SettingsService.instanceOrNull!;
-                    final isListMode = svc.read(SettingsService.viewMode) == ViewMode.list;
-                    final episodePosterMode = svc.read(SettingsService.episodePosterMode);
-                    final libraryDensity = svc.read(SettingsService.libraryDensity);
+      child: PrimaryScrollController(
+        controller: scrollController,
+        child: IosStatusBarTapScrollToTop(
+          controller: scrollController,
+          child: OverlaySheetHost(
+            child: Scaffold(
+              key: _overlayChildKey,
+              body: CustomScrollView(
+                primary: true,
+                clipBehavior: Clip.none,
+                slivers: [
+                  CustomAppBar(title: Text(widget.hub.title), pinned: true, actions: buildFocusableAppBarActions()),
+                  if (_errorMessage != null)
+                    SliverErrorState(message: _errorMessage!, onRetry: _loadMoreItems)
+                  else if (_filteredItems.isEmpty && _isLoading)
+                    LoadingIndicatorBox.sliver
+                  else if (_filteredItems.isEmpty)
+                    SliverFillRemaining(child: Center(child: Text(t.hubDetail.noItemsFound)))
+                  else
+                    SettingsBuilder(
+                      prefs: const [
+                        SettingsService.viewMode,
+                        SettingsService.episodePosterMode,
+                        SettingsService.libraryDensity,
+                      ],
+                      builder: (context) {
+                        final svc = SettingsService.instanceOrNull!;
+                        final isListMode = svc.read(SettingsService.viewMode) == ViewMode.list;
+                        final episodePosterMode = svc.read(SettingsService.episodePosterMode);
+                        final libraryDensity = svc.read(SettingsService.libraryDensity);
 
-                    // Determine hub content type for layout decisions
-                    final hasEpisodes = _filteredItems.any((item) => item.usesWideAspectRatio(episodePosterMode));
-                    final hasNonEpisodes = _filteredItems.any((item) => !item.usesWideAspectRatio(episodePosterMode));
+                        // Determine hub content type for layout decisions
+                        final hasEpisodes = _filteredItems.any((item) => item.usesWideAspectRatio(episodePosterMode));
+                        final hasNonEpisodes = _filteredItems.any(
+                          (item) => !item.usesWideAspectRatio(episodePosterMode),
+                        );
 
-                    // Mixed hub = has both episodes AND non-episodes
-                    final isMixedHub = hasEpisodes && hasNonEpisodes;
+                        // Mixed hub = has both episodes AND non-episodes
+                        final isMixedHub = hasEpisodes && hasNonEpisodes;
 
-                    // Episode-only = all items are episodes with thumbnails
-                    final isEpisodeOnlyHub = hasEpisodes && !hasNonEpisodes;
+                        // Episode-only = all items are episodes with thumbnails
+                        final isEpisodeOnlyHub = hasEpisodes && !hasNonEpisodes;
 
-                    // Use 16:9 for episode-only hubs OR mixed hubs (with episode thumbnail mode)
-                    final useWideLayout =
-                        episodePosterMode == EpisodePosterMode.episodeThumbnail && (isEpisodeOnlyHub || isMixedHub);
+                        // Use 16:9 for episode-only hubs OR mixed hubs (with episode thumbnail mode)
+                        final useWideLayout =
+                            episodePosterMode == EpisodePosterMode.episodeThumbnail && (isEpisodeOnlyHub || isMixedHub);
 
-                    if (isListMode) {
-                      return SliverPadding(
-                        padding: const EdgeInsets.all(8),
-                        sliver: SliverList.builder(
-                          itemCount: _filteredItems.length,
-                          itemBuilder: (context, index) {
-                            final item = _filteredItems[index];
-                            final focusNode = _focusNodeForIndex(index);
+                        if (isListMode) {
+                          return SliverPadding(
+                            padding: const EdgeInsets.all(8),
+                            sliver: SliverList.builder(
+                              itemCount: _filteredItems.length,
+                              itemBuilder: (context, index) {
+                                final item = _filteredItems[index];
+                                final focusNode = _focusNodeForIndex(index);
 
-                            return FocusableMediaCard(
-                              focusNode: focusNode,
-                              item: item,
-                              disableScale: true,
-                              onRefresh: _handleItemRefresh,
-                              onRemoveFromContinueWatching: widget.isInContinueWatching
-                                  ? _handleRemoveFromContinueWatching
-                                  : null,
-                              isInContinueWatching: widget.isInContinueWatching,
-                              onNavigateUp: index == 0 ? navigateToAppBar : null,
-                              onBack: handleBackFromContent,
-                              onFocusChange: (hasFocus) => trackGridItemFocus(index, hasFocus),
-                              mixedHubContext: isMixedHub,
-                            );
-                          },
-                        ),
-                      );
-                    }
-
-                    return SliverPadding(
-                      padding: const EdgeInsets.all(8),
-                      sliver: SliverLayoutBuilder(
-                        builder: (context, constraints) {
-                          final maxExtent = GridSizeCalculator.getMaxCrossAxisExtentWithPadding(
-                            context,
-                            libraryDensity,
-                            16,
-                          );
-                          final columnCount = GridSizeCalculator.getColumnCount(
-                            constraints.crossAxisExtent,
-                            useWideLayout ? maxExtent * 1.8 : maxExtent,
-                          );
-
-                          return SliverGrid(
-                            gridDelegate: MediaGridDelegate.createDelegate(
-                              context: context,
-                              density: libraryDensity,
-                              usePaddingAware: true,
-                              horizontalPadding: 16,
-                              useWideAspectRatio: useWideLayout,
+                                return FocusableMediaCard(
+                                  focusNode: focusNode,
+                                  item: item,
+                                  disableScale: true,
+                                  onRefresh: _handleItemRefresh,
+                                  onRemoveFromContinueWatching: widget.isInContinueWatching
+                                      ? _handleRemoveFromContinueWatching
+                                      : null,
+                                  isInContinueWatching: widget.isInContinueWatching,
+                                  onNavigateUp: index == 0 ? navigateToAppBar : null,
+                                  onBack: handleBackFromContent,
+                                  onFocusChange: (hasFocus) => trackGridItemFocus(index, hasFocus),
+                                  mixedHubContext: isMixedHub,
+                                );
+                              },
                             ),
-                            delegate: SliverChildBuilderDelegate((context, index) {
-                              final item = _filteredItems[index];
-                              final focusNode = _focusNodeForIndex(index);
-                              final isFirstRow = GridSizeCalculator.isFirstRow(index, columnCount);
-                              final isFirstColumn = GridSizeCalculator.isFirstColumn(index, columnCount);
-
-                              return FocusableMediaCard(
-                                focusNode: focusNode,
-                                item: item,
-                                onRefresh: _handleItemRefresh,
-                                onRemoveFromContinueWatching: widget.isInContinueWatching
-                                    ? _handleRemoveFromContinueWatching
-                                    : null,
-                                isInContinueWatching: widget.isInContinueWatching,
-                                onNavigateUp: isFirstRow ? navigateToAppBar : null,
-                                onNavigateLeft: isFirstColumn ? () {} : null,
-                                onBack: handleBackFromContent,
-                                onFocusChange: (hasFocus) => trackGridItemFocus(index, hasFocus),
-                                mixedHubContext: isMixedHub,
-                              );
-                            }, childCount: _filteredItems.length),
                           );
-                        },
-                      ),
-                    );
-                  },
-                ),
-            ],
+                        }
+
+                        return SliverPadding(
+                          padding: const EdgeInsets.all(8),
+                          sliver: SliverLayoutBuilder(
+                            builder: (context, constraints) {
+                              final maxExtent = GridSizeCalculator.getMaxCrossAxisExtentWithPadding(
+                                context,
+                                libraryDensity,
+                                16,
+                              );
+                              final columnCount = GridSizeCalculator.getColumnCount(
+                                constraints.crossAxisExtent,
+                                useWideLayout ? maxExtent * 1.8 : maxExtent,
+                              );
+
+                              return SliverGrid(
+                                gridDelegate: MediaGridDelegate.createDelegate(
+                                  context: context,
+                                  density: libraryDensity,
+                                  usePaddingAware: true,
+                                  horizontalPadding: 16,
+                                  useWideAspectRatio: useWideLayout,
+                                ),
+                                delegate: SliverChildBuilderDelegate((context, index) {
+                                  final item = _filteredItems[index];
+                                  final focusNode = _focusNodeForIndex(index);
+                                  final isFirstRow = GridSizeCalculator.isFirstRow(index, columnCount);
+                                  final isFirstColumn = GridSizeCalculator.isFirstColumn(index, columnCount);
+
+                                  return FocusableMediaCard(
+                                    focusNode: focusNode,
+                                    item: item,
+                                    onRefresh: _handleItemRefresh,
+                                    onRemoveFromContinueWatching: widget.isInContinueWatching
+                                        ? _handleRemoveFromContinueWatching
+                                        : null,
+                                    isInContinueWatching: widget.isInContinueWatching,
+                                    onNavigateUp: isFirstRow ? navigateToAppBar : null,
+                                    onNavigateLeft: isFirstColumn ? () {} : null,
+                                    onBack: handleBackFromContent,
+                                    onFocusChange: (hasFocus) => trackGridItemFocus(index, hasFocus),
+                                    mixedHubContext: isMixedHub,
+                                  );
+                                }, childCount: _filteredItems.length),
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  if (_filteredItems.isNotEmpty && (_isLoadingMore || _continuationErrorMessage != null))
+                    _buildContinuationStatusSliver(),
+                ],
+              ),
+            ),
           ),
         ),
       ),

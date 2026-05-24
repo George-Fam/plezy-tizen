@@ -1,11 +1,11 @@
 name: plezy
 description: "A beautiful Plex and Jellyfin client for Flutter"
 publish_to: "none"
-version: 2.0.0+87
+version: 2.2.0+100
 
 environment:
-  sdk: ">=3.10.7 <4.0.0"
-  flutter: ">=3.38.4"
+  sdk: ">=3.12.0 <4.0.0"
+  flutter: ">=3.44.0"
 
 dependencies:
   flutter:
@@ -27,7 +27,11 @@ dependencies:
   slang: ^4.14.0
   slang_flutter: ^4.14.0
   duration: ^4.0.3
-  connectivity_plus: ^7.0.0
+  connectivity_plus:
+    git:
+      url: https://github.com/edde746/plus_plugins
+      ref: 2b614414ce95d920880765d07cbb9759699a4563
+      path: packages/connectivity_plus/connectivity_plus
   os_media_controls:
     git:
       url: https://github.com/edde746/os-media-controls
@@ -40,7 +44,7 @@ dependencies:
       path: wakelock_plus
   path_provider: ^2.1.0
   path: ^1.9.0
-  universal_gamepad: ^1.5.0
+  universal_gamepad: ^1.5.7
   drift: ^2.31.0
   sqlite3_flutter_libs: ^0.5.42
   crypto: ^3.0.7

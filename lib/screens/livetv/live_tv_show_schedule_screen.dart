@@ -137,7 +137,7 @@ class _LiveTvShowScheduleScreenState extends State<LiveTvShowScheduleScreen>
             SliverList(
               delegate: SliverChildBuilderDelegate((context, index) {
                 final program = _programs[index];
-                final channel = findChannel(program.channelIdentifier);
+                final channel = findChannelForProgram(program);
                 void onTap() {
                   if (program.isCurrentlyAiring && channel != null) {
                     tuneChannel(channel);

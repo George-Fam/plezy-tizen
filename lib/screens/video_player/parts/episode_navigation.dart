@@ -48,7 +48,7 @@ extension _VideoPlayerEpisodeNavigationMethods on VideoPlayerScreenState {
     });
 
     final target = clampSeekPosition(currentPlayer, Duration.zero);
-    await currentPlayer.seek(target);
+    await _seekPlayback(target);
     if (!mounted || currentPlayer != player) return;
 
     _notifyWatchTogetherSeek(target);
@@ -192,9 +192,7 @@ extension _VideoPlayerEpisodeNavigationMethods on VideoPlayerScreenState {
       _effectiveIsOffline = result.isOffline;
       _playbackPlaySessionId = result.playSessionId;
       _playbackPlayMethod = result.playMethod;
-      if (result.activeAudioStreamId != null) {
-        _selectedAudioStreamId = result.activeAudioStreamId;
-      }
+      _selectedAudioStreamId = result.activeAudioStreamId;
       if (result.fallbackReason != null && !_selectedQualityPreset.isOriginal) {
         if (mounted) {
           showErrorSnackBar(context, t.videoControls.transcodeUnavailableFallback);
@@ -218,10 +216,19 @@ extension _VideoPlayerEpisodeNavigationMethods on VideoPlayerScreenState {
       await currentPlayer.setDisplayCriteria(
         !result.isTranscoding && displayCriteria?.canPrimeNativeDisplayCriteria == true ? displayCriteria : null,
       );
+      final openTiming = _playbackOpenTiming(
+        backend: episodeMetadata.backend,
+        isTranscoding: result.isTranscoding,
+        resumePosition: resumePosition,
+        durationMs: episodeMetadata.durationMs,
+      );
+      await currentPlayer.setProperty('force-seekable', result.isTranscoding ? 'yes' : 'no');
       await currentPlayer.open(
-        Media(result.videoUrl!, start: resumePosition, headers: streamHeaders),
+        Media(result.videoUrl!, start: openTiming.mediaStart, headers: streamHeaders),
         play: isExoPlayer || !hasExternalSubs,
         externalSubtitles: isExoPlayer && hasExternalSubs ? result.externalSubtitles : null,
+        timelineOffset: openTiming.timelineOffset,
+        timelineDuration: openTiming.timelineDuration,
       );
 
       _completionTriggered = false;

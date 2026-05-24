@@ -4,6 +4,7 @@ import '../../../models/livetv_capture_buffer.dart';
 import '../../../mpv/mpv.dart';
 import '../../../focus/focusable_wrapper.dart';
 import '../../../utils/formatters.dart';
+import '../../clickable_cursor.dart';
 
 /// Timeline bar for live TV time-shift.
 ///
@@ -134,15 +135,18 @@ class _LiveTimelineBarState extends State<LiveTimelineBar> {
       disableScale: true,
       child: Builder(
         builder: (context) {
-          return GestureDetector(
-            onHorizontalDragStart: widget.enabled ? _onDragStart : null,
-            onHorizontalDragUpdate: widget.enabled ? (details) => _onDragUpdate(details, _widthOf(context)) : null,
-            onHorizontalDragEnd: widget.enabled ? _onDragEnd : null,
-            onTapUp: widget.enabled ? (details) => _onTap(details, _widthOf(context)) : null,
-            child: SizedBox(
-              width: double.infinity,
-              height: 24,
-              child: CustomPaint(painter: _LiveTimelinePainter(positionFraction: positionFraction)),
+          return ClickableCursor(
+            enabled: widget.enabled,
+            child: GestureDetector(
+              onHorizontalDragStart: widget.enabled ? (_) => _onDragStart() : null,
+              onHorizontalDragUpdate: widget.enabled ? (details) => _onDragUpdate(details, _widthOf(context)) : null,
+              onHorizontalDragEnd: widget.enabled ? (_) => _onDragEnd() : null,
+              onTapUp: widget.enabled ? (details) => _onTap(details, _widthOf(context)) : null,
+              child: SizedBox(
+                width: double.infinity,
+                height: 24,
+                child: CustomPaint(painter: _LiveTimelinePainter(positionFraction: positionFraction)),
+              ),
             ),
           );
         },
@@ -150,7 +154,7 @@ class _LiveTimelineBarState extends State<LiveTimelineBar> {
     );
   }
 
-  void _onDragStart(DragStartDetails details) {
+  void _onDragStart() {
     setState(() {
       _isDragging = true;
       _dragPositionEpoch = _currentEpoch(widget.player.state.position);
@@ -165,7 +169,7 @@ class _LiveTimelineBarState extends State<LiveTimelineBar> {
     });
   }
 
-  void _onDragEnd(DragEndDetails details) {
+  void _onDragEnd() {
     final target = _dragPositionEpoch;
     setState(() => _isDragging = false);
     widget.onSeekEnd?.call(target);

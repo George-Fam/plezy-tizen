@@ -35,6 +35,17 @@ enum EpisodePosterMode { seriesPoster, seasonPoster, episodeThumbnail }
 
 enum SubAssOverride { no, yes, scale, force, strip }
 
+enum DvConversionModePreference { auto, disabled, dv81, hevcStrip }
+
+extension DvConversionModePreferenceNativeValue on DvConversionModePreference {
+  String get nativeValue => switch (this) {
+    DvConversionModePreference.auto => 'auto',
+    DvConversionModePreference.disabled => 'disabled',
+    DvConversionModePreference.dv81 => 'dv81',
+    DvConversionModePreference.hevcStrip => 'hevc_strip',
+  };
+}
+
 const String _bufferSizeMigratedKey = 'buffer_size_migrated_to_auto';
 const String _legacyUseSeasonPosterKey = 'use_season_poster';
 const String _legacyMpvConfigEntriesKey = 'mpv_config_entries';
@@ -313,6 +324,11 @@ class SettingsService extends BaseSharedPreferencesService {
   static const enableSimklScrobble = BoolPref('enable_simkl_scrobble', defaultValue: true);
   static const matchContentFrameRate = BoolPref('match_content_frame_rate');
   static const tunneledPlayback = BoolPref('tunneled_playback', defaultValue: true);
+  static const dvConversionMode = EnumPref<DvConversionModePreference>(
+    'dv_conversion_mode',
+    values: DvConversionModePreference.values,
+    defaultValue: DvConversionModePreference.auto,
+  );
   static const defaultQualityPreset = EnumPref<TranscodeQualityPreset>(
     'default_quality_preset',
     values: TranscodeQualityPreset.values,
@@ -341,6 +357,10 @@ class SettingsService extends BaseSharedPreferencesService {
   static const customDownloadPath = NullableStringPref('custom_download_path');
   static final customRelayUrl = NullableStringPref('custom_relay_url', transform: _trimEmptyAsNull);
   static const recentRooms = NullableStringPref('watch_together_recent_rooms');
+  static final companionRemoteLastHostAddress = NullableStringPref(
+    'companion_remote_last_host_address',
+    transform: _trimEmptyAsNull,
+  );
 
   static final maxVolume = IntPref('max_volume', defaultValue: 100, transform: (v) => v.clamp(100, 300));
   static final subtitlePosition = IntPref('subtitle_position', defaultValue: 100, transform: (v) => v.clamp(0, 100));
@@ -686,6 +706,7 @@ class SettingsService extends BaseSharedPreferencesService {
     enableSimklScrobble,
     matchContentFrameRate,
     tunneledPlayback,
+    dvConversionMode,
     defaultPlaybackSpeed,
     defaultBoxFitMode,
     autoPlayNextEpisode,
@@ -719,6 +740,7 @@ class SettingsService extends BaseSharedPreferencesService {
     selectedExternalPlayer,
     customExternalPlayers,
     customRelayUrl,
+    companionRemoteLastHostAddress,
   ];
 
   Future<void> resetAllSettings() async {

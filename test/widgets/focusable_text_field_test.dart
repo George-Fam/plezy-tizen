@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plezy/focus/focusable_text_field.dart';
+import 'package:plezy/services/gamepad_service.dart';
 import 'package:plezy/utils/platform_detector.dart';
 
 void main() {
   tearDown(() {
     TvDetectionService.debugSetAppleTVOverride(null);
     TvDetectionService.setForceTVSync(false);
+    GamepadService.debugNativeTextInputFocusHandler = null;
   });
 
   testWidgets('tab traversal focuses the text form field', (tester) async {
@@ -315,6 +317,7 @@ void main() {
     final downResult = handler(fieldFocusNode, _remoteKey(LogicalKeyboardKey.arrowDown));
     final selectResult = handler(fieldFocusNode, _remoteKey(LogicalKeyboardKey.select));
     final backResult = handler(fieldFocusNode, _remoteKey(LogicalKeyboardKey.goBack));
+    final keyboardDownResult = handler(fieldFocusNode, _keyboardDpadKey(LogicalKeyboardKey.arrowDown));
     final synthesizedSelectResult = handler(
       fieldFocusNode,
       const KeyDownEvent(
@@ -324,12 +327,15 @@ void main() {
         deviceType: ui.KeyEventDeviceType.keyboard,
       ),
     );
+    final keyboardBackResult = handler(fieldFocusNode, _keyboardDpadKey(LogicalKeyboardKey.goBack));
     await tester.pump();
 
     expect(downResult, KeyEventResult.skipRemainingHandlers);
     expect(selectResult, KeyEventResult.skipRemainingHandlers);
     expect(backResult, KeyEventResult.skipRemainingHandlers);
+    expect(keyboardDownResult, KeyEventResult.skipRemainingHandlers);
     expect(synthesizedSelectResult, KeyEventResult.skipRemainingHandlers);
+    expect(keyboardBackResult, KeyEventResult.skipRemainingHandlers);
     expect(fieldFocusNode.hasPrimaryFocus, isTrue);
     expect(nextFocusNode.hasFocus, isFalse);
     expect(selects, 0);
@@ -337,30 +343,74 @@ void main() {
     expect(find.byType(Dialog), findsNothing);
   });
 
-  testWidgets('Android TV physical keyboard still uses field navigation', (tester) async {
+  testWidgets('Android TV native text input focus is reported to platform', (tester) async {
     TvDetectionService.debugSetAppleTVOverride(null);
     await TvDetectionService.getInstance(forceTv: true);
     TvDetectionService.setForceTVSync(true);
+    const channel = MethodChannel('com.plezy/text_input');
+    final calls = <MethodCall>[];
+    final gamepadFocusStates = <bool>[];
+    GamepadService.debugNativeTextInputFocusHandler = (focused) async {
+      gamepadFocusStates.add(focused);
+    };
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null),
+    );
+
     final controller = TextEditingController();
-    final fieldFocusNode = FocusNode(debugLabel: 'name_field');
-    final nextFocusNode = FocusNode(debugLabel: 'next_button');
+    final fieldFocusNode = FocusNode(debugLabel: 'server_url_field');
+    final otherFocusNode = FocusNode(debugLabel: 'other');
     addTearDown(controller.dispose);
     addTearDown(fieldFocusNode.dispose);
-    addTearDown(nextFocusNode.dispose);
+    addTearDown(otherFocusNode.dispose);
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: Column(
             children: [
-              FocusableTextField(
-                controller: controller,
-                focusNode: fieldFocusNode,
-                onNavigateDown: nextFocusNode.requestFocus,
-              ),
-              FilledButton(focusNode: nextFocusNode, onPressed: () {}, child: const Text('Next')),
+              FocusableTextFormField(controller: controller, focusNode: fieldFocusNode),
+              Focus(focusNode: otherFocusNode, child: const SizedBox.shrink()),
             ],
           ),
+        ),
+      ),
+    );
+
+    fieldFocusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+
+    expect(calls.last.method, 'setNativeTextInputFocused');
+    expect(calls.last.arguments, isTrue);
+    expect(gamepadFocusStates, [true]);
+
+    otherFocusNode.requestFocus();
+    await tester.pump();
+    await tester.pump();
+
+    expect(calls.last.method, 'setNativeTextInputFocused');
+    expect(calls.last.arguments, isFalse);
+    expect(gamepadFocusStates, [true, false]);
+  });
+
+  testWidgets('Android TV physical keyboard text keys fall through to the field', (tester) async {
+    TvDetectionService.debugSetAppleTVOverride(null);
+    await TvDetectionService.getInstance(forceTv: true);
+    TvDetectionService.setForceTVSync(true);
+    final controller = TextEditingController();
+    final fieldFocusNode = FocusNode(debugLabel: 'name_field');
+    addTearDown(controller.dispose);
+    addTearDown(fieldFocusNode.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FocusableTextField(controller: controller, focusNode: fieldFocusNode),
         ),
       ),
     );
@@ -370,16 +420,17 @@ void main() {
     final result = fieldFocusNode.onKeyEvent!(
       fieldFocusNode,
       const KeyDownEvent(
-        physicalKey: PhysicalKeyboardKey.arrowDown,
-        logicalKey: LogicalKeyboardKey.arrowDown,
+        physicalKey: PhysicalKeyboardKey.keyA,
+        logicalKey: LogicalKeyboardKey.keyA,
+        character: 'a',
         timeStamp: Duration.zero,
         deviceType: ui.KeyEventDeviceType.keyboard,
       ),
     );
     await tester.pump();
 
-    expect(result, KeyEventResult.handled);
-    expect(nextFocusNode.hasPrimaryFocus, isTrue);
+    expect(result, KeyEventResult.ignored);
+    expect(fieldFocusNode.hasPrimaryFocus, isTrue);
   });
 
   testWidgets('tvOS engine-synthesized select opens the virtual keyboard', (tester) async {
@@ -519,6 +570,15 @@ KeyDownEvent _remoteKey(LogicalKeyboardKey key) {
     logicalKey: key,
     timeStamp: Duration.zero,
     deviceType: ui.KeyEventDeviceType.directionalPad,
+  );
+}
+
+KeyDownEvent _keyboardDpadKey(LogicalKeyboardKey key) {
+  return KeyDownEvent(
+    physicalKey: _physicalKeyFor(key),
+    logicalKey: key,
+    timeStamp: Duration.zero,
+    deviceType: ui.KeyEventDeviceType.keyboard,
   );
 }
 

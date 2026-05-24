@@ -39,20 +39,22 @@ class AppearanceSettingsScreen extends StatelessWidget {
           title: t.settings.showEpisodeNumberOnCards,
           subtitle: t.settings.showEpisodeNumberOnCardsDescription,
         ),
-        SettingSwitchTile(
-          pref: SettingsService.showSeasonPostersOnTabs,
-          icon: Symbols.image_rounded,
-          title: t.settings.showSeasonPostersOnTabs,
-          subtitle: t.settings.showSeasonPostersOnTabsDescription,
-        ),
+        if (!PlatformDetector.isTV())
+          SettingSwitchTile(
+            pref: SettingsService.showSeasonPostersOnTabs,
+            icon: Symbols.image_rounded,
+            title: t.settings.showSeasonPostersOnTabs,
+            subtitle: t.settings.showSeasonPostersOnTabsDescription,
+          ),
 
         SettingsSectionHeader(t.settings.homeScreen),
-        SettingSwitchTile(
-          pref: SettingsService.showHeroSection,
-          icon: Symbols.featured_play_list_rounded,
-          title: t.settings.showHeroSection,
-          subtitle: t.settings.showHeroSectionDescription,
-        ),
+        if (!PlatformDetector.isTV())
+          SettingSwitchTile(
+            pref: SettingsService.showHeroSection,
+            icon: Symbols.featured_play_list_rounded,
+            title: t.settings.showHeroSection,
+            subtitle: t.settings.showHeroSectionDescription,
+          ),
         SettingSwitchTile(
           pref: SettingsService.useGlobalHubs,
           icon: Symbols.home_rounded,

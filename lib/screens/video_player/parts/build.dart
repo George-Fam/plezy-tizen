@@ -46,6 +46,25 @@ extension _VideoPlayerBuildMethods on VideoPlayerScreenState {
     });
   }
 
+  int? _selectedSourceSubtitleStreamId(List<MediaSubtitleTrack> tracks) {
+    if (tracks.isEmpty) return null;
+    for (final track in tracks) {
+      if (track.selected) return track.id;
+    }
+    return 0;
+  }
+
+  List<MediaSubtitleTrack> _sourceSubtitleTracksForControls() {
+    final tracks = _currentMediaInfo?.subtitleTracks ?? const <MediaSubtitleTrack>[];
+    if (!_isTranscoding) return tracks;
+    return tracks
+        .where((track) {
+          final hasKey = track.key != null && track.key!.isNotEmpty;
+          return hasKey || CodecUtils.isTextSubtitleCodec(track.codec);
+        })
+        .toList(growable: false);
+  }
+
   Widget _buildLoadingSpinner() {
     return const Scaffold(
       backgroundColor: Colors.black,
@@ -201,21 +220,28 @@ extension _VideoPlayerBuildMethods on VideoPlayerScreenState {
                       onPrevious = (canRestartOrPrevious && _canNavigateEpisodes()) ? _restartOrPlayPrevious : null;
                     }
 
+                    final sourceAudioTracks = _currentMediaInfo?.audioTracks ?? const <MediaAudioTrack>[];
+                    final sourceSubtitleTracks = _sourceSubtitleTracksForControls();
+
                     return Video(
                       player: player!,
-                      controls: (context) => plexVideoControlsBuilder(
-                        player!,
-                        _currentMetadata,
+                      controls: (context) => PlexVideoControls(
+                        player: player!,
+                        metadata: _currentMetadata,
                         onNext: onNext,
                         onPrevious: onPrevious,
                         availableVersions: _availableVersions,
                         selectedMediaIndex: widget.selectedMediaIndex,
+                        selectedMediaSourceId: widget.selectedMediaSourceId,
                         selectedQualityPreset: _selectedQualityPreset,
                         serverSupportsTranscoding: _serverSupportsTranscoding,
                         isTranscoding: _isTranscoding,
                         isOfflinePlayback: _isOfflinePlayback,
-                        sourceAudioTracks: _currentMediaInfo?.audioTracks ?? const [],
+                        sourceAudioTracks: sourceAudioTracks,
                         selectedAudioStreamId: _selectedAudioStreamId,
+                        sourceSubtitleTracks: sourceSubtitleTracks,
+                        selectedSubtitleStreamId: _selectedSourceSubtitleStreamId(sourceSubtitleTracks),
+                        sourcePartId: _currentMediaInfo?.partId,
                         onTogglePIPMode: _togglePIPMode,
                         boxFitMode: _videoFilterManager?.boxFitMode ?? 0,
                         onCycleBoxFitMode: _cycleBoxFitMode,
@@ -224,6 +250,7 @@ extension _VideoPlayerBuildMethods on VideoPlayerScreenState {
                         onAudioTrackChanged: _onAudioTrackChanged,
                         onSubtitleTrackChanged: _onSubtitleTrackChanged,
                         onSecondarySubtitleTrackChanged: _onSecondarySubtitleTrackChanged,
+                        onSeekRequested: _seekPlayback,
                         onSeekCompleted: _notifyWatchTogetherSeek,
                         onBack: _handleBackButton,
                         onReachedEnd: ({skipAutoPlayCountdown = false}) =>

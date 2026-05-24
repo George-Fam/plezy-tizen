@@ -3,16 +3,51 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plezy/media/media_source_info.dart';
 import 'package:plezy/media/media_version.dart';
+import 'package:plezy/models/shader_preset.dart';
 import 'package:plezy/widgets/video_controls/video_controls.dart';
 import 'package:plezy/widgets/video_controls/painters/buffer_range_painter.dart';
 import 'package:plezy/widgets/video_controls/widgets/mobile_skip_zones.dart';
 import 'package:plezy/widgets/video_controls/widgets/timeline_slider.dart';
 
 void main() {
+  group('resolveShaderTogglePreset', () {
+    test('turns shaders off when a shader is currently active', () {
+      final result = resolveShaderTogglePreset(
+        currentPreset: ShaderPreset.nvscalerDefault,
+        savedPreset: ShaderPreset.nvscalerDefault,
+        allPresets: ShaderPreset.allPresets,
+      );
+
+      expect(result, ShaderPreset.none);
+    });
+
+    test('restores the saved preset when shaders are currently off', () {
+      final saved = ShaderPreset.artcnnPreset(ArtCNNModel.c4f16, ArtCNNVariant.neutral);
+      final result = resolveShaderTogglePreset(
+        currentPreset: ShaderPreset.none,
+        savedPreset: saved,
+        allPresets: ShaderPreset.allPresets,
+      );
+
+      expect(result, saved);
+    });
+
+    test('falls back to the first enabled preset when no shader is saved', () {
+      final result = resolveShaderTogglePreset(
+        currentPreset: ShaderPreset.none,
+        savedPreset: ShaderPreset.none,
+        allPresets: const [ShaderPreset.none, ShaderPreset.nvscalerDefault],
+      );
+
+      expect(result, ShaderPreset.nvscalerDefault);
+    });
+  });
+
   group('effectiveVersionQualityControls', () {
     test('clears switchable version and quality state during offline playback', () {
       final version = MediaVersion(id: 'v1', videoResolution: '1080');
       final audio = MediaAudioTrack(id: 1, languageCode: 'eng', selected: false);
+      final subtitle = MediaSubtitleTrack(id: 2, languageCode: 'eng', selected: false, forced: false);
 
       final result = effectiveVersionQualityControls(
         isOfflinePlayback: true,
@@ -21,6 +56,8 @@ void main() {
         isTranscoding: true,
         sourceAudioTracks: [audio],
         selectedAudioStreamId: 1,
+        sourceSubtitleTracks: [subtitle],
+        selectedSubtitleStreamId: 2,
       );
 
       expect(result.canSwitch, isFalse);
@@ -29,11 +66,14 @@ void main() {
       expect(result.isTranscoding, isFalse);
       expect(result.sourceAudioTracks, isEmpty);
       expect(result.selectedAudioStreamId, isNull);
+      expect(result.sourceSubtitleTracks, isEmpty);
+      expect(result.selectedSubtitleStreamId, isNull);
     });
 
     test('keeps switchable state during online playback', () {
       final version = MediaVersion(id: 'v1', videoResolution: '1080');
       final audio = MediaAudioTrack(id: 1, languageCode: 'eng', selected: false);
+      final subtitle = MediaSubtitleTrack(id: 2, languageCode: 'eng', selected: false, forced: false);
 
       final result = effectiveVersionQualityControls(
         isOfflinePlayback: false,
@@ -42,6 +82,8 @@ void main() {
         isTranscoding: true,
         sourceAudioTracks: [audio],
         selectedAudioStreamId: 1,
+        sourceSubtitleTracks: [subtitle],
+        selectedSubtitleStreamId: 2,
       );
 
       expect(result.canSwitch, isTrue);
@@ -50,6 +92,8 @@ void main() {
       expect(result.isTranscoding, isTrue);
       expect(result.sourceAudioTracks, [audio]);
       expect(result.selectedAudioStreamId, 1);
+      expect(result.sourceSubtitleTracks, [subtitle]);
+      expect(result.selectedSubtitleStreamId, 2);
     });
   });
 

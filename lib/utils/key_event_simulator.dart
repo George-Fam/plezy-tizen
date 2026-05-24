@@ -4,11 +4,23 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'text_input_diagnostics.dart';
+
+String _describeSimulatedKey(KeyEvent event) {
+  return 'type=${event.runtimeType} logical=${event.logicalKey.keyLabel}/${event.logicalKey.keyId} '
+      'physical=${event.physicalKey.usbHidUsage} deviceType=${event.deviceType}';
+}
+
+void _logKeySimulator(String message) {
+  TextInputDiagnostics.log('KeySimulator', message);
+}
+
 /// Shared utility for simulating key press events through the focus tree.
 ///
 /// Used by companion remotes, Apple TV touch input, and gamepad services to
 /// translate external input into focus-tree key events.
 void simulateKeyPress(LogicalKeyboardKey logicalKey) {
+  _logKeySimulator('simulateKeyPress scheduled logical=${logicalKey.keyLabel}/${logicalKey.keyId}');
   // The dispatch below is deferred via addPostFrameCallback to ensure the
   // focus tree is settled before we walk it. That post-frame callback only
   // fires after a frame actually renders — and when Flutter is idle (no
@@ -45,6 +57,7 @@ void simulateKeyPress(LogicalKeyboardKey logicalKey) {
 
 /// Simulate only key down. Pair with [simulateKeyUp] for held buttons.
 void simulateKeyDown(LogicalKeyboardKey logicalKey) {
+  _logKeySimulator('simulateKeyDown scheduled logical=${logicalKey.keyLabel}/${logicalKey.keyId}');
   scheduleFrameIfIdle();
   SchedulerBinding.instance.addPostFrameCallback((_) {
     final focusNode = FocusManager.instance.primaryFocus;
@@ -64,6 +77,7 @@ void simulateKeyDown(LogicalKeyboardKey logicalKey) {
 
 /// Simulate only key up. The release half of [simulateKeyDown].
 void simulateKeyUp(LogicalKeyboardKey logicalKey) {
+  _logKeySimulator('simulateKeyUp scheduled logical=${logicalKey.keyLabel}/${logicalKey.keyId}');
   scheduleFrameIfIdle();
   SchedulerBinding.instance.addPostFrameCallback((_) {
     final focusNode = FocusManager.instance.primaryFocus;
@@ -82,12 +96,21 @@ void simulateKeyUp(LogicalKeyboardKey logicalKey) {
 }
 
 void _dispatchKeyEvent(FocusNode focusNode, KeyEvent event) {
+  _logKeySimulator('dispatch start focus=${focusNode.debugLabel} key=(${_describeSimulatedKey(event)})');
   FocusNode? node = focusNode;
   while (node != null) {
-    if (node.onKeyEvent != null && node.onKeyEvent!(node, event) == KeyEventResult.handled) {
-      break;
+    if (node.onKeyEvent != null) {
+      final result = node.onKeyEvent!(node, event);
+      _logKeySimulator('dispatch node=${node.debugLabel} result=$result key=(${_describeSimulatedKey(event)})');
+      if (result != KeyEventResult.ignored) {
+        _logKeySimulator('dispatch stopped node=${node.debugLabel} result=$result');
+        break;
+      }
     }
     node = node.parent;
+  }
+  if (node == null) {
+    _logKeySimulator('dispatch reached root ignored key=(${_describeSimulatedKey(event)})');
   }
 }
 

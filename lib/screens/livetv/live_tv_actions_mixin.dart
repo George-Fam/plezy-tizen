@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/livetv_channel.dart';
 import '../../models/livetv_program.dart';
 import '../../providers/multi_server_provider.dart';
+import '../../utils/live_tv_matching.dart';
 import '../../utils/live_tv_player_navigation.dart';
 import '../../utils/media_image_helper.dart';
 import 'program_details_sheet.dart';
@@ -22,6 +23,10 @@ mixin LiveTvActionsMixin<T extends StatefulWidget> on State<T> {
     return liveTvChannels.where((ch) {
       return ch.identifier == channelIdentifier || ch.key == channelIdentifier;
     }).firstOrNull;
+  }
+
+  LiveTvChannel? findChannelForProgram(LiveTvProgram program) {
+    return liveTvChannels.where((channel) => liveTvProgramMatchesChannel(program, channel)).firstOrNull;
   }
 
   /// Start live playback for [channel] on its owning server.

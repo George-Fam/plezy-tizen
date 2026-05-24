@@ -1,13 +1,76 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/gamepad_service.dart';
 import '../utils/platform_detector.dart';
+import '../utils/text_input_diagnostics.dart';
 import '../widgets/tv_virtual_keyboard.dart';
 import 'dpad_navigator.dart';
 
 bool _usesTvKeyboard(bool enableTvKeyboard) => enableTvKeyboard && PlatformDetector.isAppleTV();
 
 String? _keyboardHint(InputDecoration? decoration) => decoration?.hintText ?? decoration?.labelText;
+
+String _describeTextInputKey(KeyEvent event) {
+  return 'type=${event.runtimeType} logical=${event.logicalKey.keyLabel}/${event.logicalKey.keyId} '
+      'physical=${event.physicalKey.usbHidUsage} deviceType=${event.deviceType} character=${event.character}';
+}
+
+void _logTvTextInput(String message) {
+  TextInputDiagnostics.log('FlutterTextField', message);
+}
+
+class _NativeTvTextInputFocusBridge {
+  static const _channel = MethodChannel('com.plezy/text_input');
+  static final Set<Object> _focusedTokens = <Object>{};
+  static bool _lastSentFocused = false;
+
+  static void setFocused(Object token, bool focused) {
+    _logTvTextInput(
+      'NativeFocusBridge.setFocused requested focused=$focused token=$token activeTokens=${_focusedTokens.length}',
+    );
+    if (focused) {
+      _focusedTokens.add(token);
+    } else {
+      _focusedTokens.remove(token);
+    }
+
+    if (!PlatformDetector.isTV() || PlatformDetector.isAppleTV()) {
+      _logTvTextInput(
+        'NativeFocusBridge clearing without platform send isTv=${PlatformDetector.isTV()} '
+        'isAppleTV=${PlatformDetector.isAppleTV()}',
+      );
+      _focusedTokens.clear();
+      _lastSentFocused = false;
+      return;
+    }
+
+    final anyFocused = _focusedTokens.isNotEmpty;
+    if (_lastSentFocused == anyFocused) {
+      _logTvTextInput('NativeFocusBridge no-op anyFocused=$anyFocused tokenCount=${_focusedTokens.length}');
+      return;
+    }
+    _lastSentFocused = anyFocused;
+    _logTvTextInput('NativeFocusBridge sending anyFocused=$anyFocused tokenCount=${_focusedTokens.length}');
+    unawaited(GamepadService.setNativeTextInputFocused(anyFocused));
+    unawaited(_sendFocused(anyFocused));
+  }
+
+  static Future<void> _sendFocused(bool focused) async {
+    try {
+      await _channel.invokeMethod<void>('setNativeTextInputFocused', focused);
+      _logTvTextInput('NativeFocusBridge platform send complete focused=$focused');
+    } on MissingPluginException {
+      _logTvTextInput('NativeFocusBridge platform send missing plugin focused=$focused');
+      // Tests and non-Android embedders do not register this channel.
+    } on PlatformException {
+      _logTvTextInput('NativeFocusBridge platform send failed focused=$focused');
+      // Focus reporting is a best-effort native routing hint.
+    }
+  }
+}
 
 KeyEventResult _handleInputKey({
   required TextEditingController controller,
@@ -31,14 +94,28 @@ KeyEventResult _handleInputKey({
   VoidCallback? onNavigateDown,
 }) {
   final key = event.logicalKey;
+  KeyEventResult finish(KeyEventResult result, String reason) {
+    _logTvTextInput(
+      'result=$result reason=$reason key=(${_describeTextInputKey(event)}) '
+      'usesTvKeyboard=$usesTvKeyboard enabled=$enabled textLength=${controller.text.length} '
+      'selection=${controller.selection} onNav(up=${onNavigateUp != null},down=${onNavigateDown != null},'
+      'left=${onNavigateLeft != null},right=${onNavigateRight != null}) onSelect=${onSelect != null} onBack=${onBack != null}',
+    );
+    return result;
+  }
+
+  _logTvTextInput(
+    'received key=(${_describeTextInputKey(event)}) usesTvKeyboard=$usesTvKeyboard enabled=$enabled '
+    'textLength=${controller.text.length} selection=${controller.selection}',
+  );
 
   if (_shouldPassNativeTvKeyToPlatform(usesTvKeyboard: usesTvKeyboard, enabled: enabled, event: event)) {
-    return KeyEventResult.skipRemainingHandlers;
+    return finish(KeyEventResult.skipRemainingHandlers, 'pass-native-tv-key-to-platform');
   }
 
   if (usesTvKeyboard && enabled && event.isTvSelectEvent) {
     if (event is KeyDownEvent) openKeyboard();
-    return KeyEventResult.handled;
+    return finish(KeyEventResult.handled, 'open-custom-tv-keyboard');
   }
 
   if (usesTvKeyboard && enabled && event.isPhysicalKeyboardEvent) {
@@ -54,12 +131,12 @@ KeyEventResult _handleInputKey({
       maxLines: maxLines,
       event: event,
     );
-    if (result != KeyEventResult.ignored) return result;
+    if (result != KeyEventResult.ignored) return finish(result, 'custom-tv-hardware-keyboard');
   }
 
   if (onBack != null && key.isBackKey) {
     if (event is KeyDownEvent) onBack();
-    return KeyEventResult.handled;
+    return finish(KeyEventResult.handled, 'onBack');
   }
 
   // Enter/numpad enter are left to TextField.onSubmitted. Handle only
@@ -68,45 +145,55 @@ KeyEventResult _handleInputKey({
       onSelect != null &&
       (key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.gameButtonA)) {
     if (event is KeyDownEvent) onSelect();
-    return KeyEventResult.handled;
+    return finish(KeyEventResult.handled, 'native-tv-non-text-select');
   }
 
-  if (!event.isActionable) return KeyEventResult.ignored;
+  if (!event.isActionable) return finish(KeyEventResult.ignored, 'non-actionable');
 
   if (key.isUpKey && onNavigateUp != null) {
     onNavigateUp();
-    return KeyEventResult.handled;
+    return finish(KeyEventResult.handled, 'onNavigateUp');
   }
   if (key.isDownKey && onNavigateDown != null) {
     onNavigateDown();
-    return KeyEventResult.handled;
+    return finish(KeyEventResult.handled, 'onNavigateDown');
   }
 
   final sel = controller.selection;
   if (sel.isCollapsed) {
     if (key.isLeftKey && sel.baseOffset == 0 && onNavigateLeft != null) {
       onNavigateLeft();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'onNavigateLeft-at-start');
     }
     if (key.isRightKey && sel.baseOffset == controller.text.length && onNavigateRight != null) {
       onNavigateRight();
-      return KeyEventResult.handled;
+      return finish(KeyEventResult.handled, 'onNavigateRight-at-end');
     }
   }
 
-  return KeyEventResult.ignored;
+  return finish(KeyEventResult.ignored, 'fall-through');
 }
 
 bool _shouldPassNativeTvKeyToPlatform({required bool usesTvKeyboard, required bool enabled, required KeyEvent event}) {
-  if (!enabled || usesTvKeyboard || !PlatformDetector.isTV()) return false;
+  if (!enabled || usesTvKeyboard || !PlatformDetector.isTV()) {
+    _logTvTextInput(
+      'native-pass=false reason=disabled-or-custom-keyboard enabled=$enabled usesTvKeyboard=$usesTvKeyboard '
+      'isTv=${PlatformDetector.isTV()} key=(${_describeTextInputKey(event)})',
+    );
+    return false;
+  }
 
   // Android TV provides its own IME. Remote keys must reach the platform so
   // users can move around that keyboard instead of escaping the app field.
+  // Some remotes (Chromecast) are reported by Flutter as keyboard events, so
+  // native TV navigation cannot rely on deviceType.
   final key = event.logicalKey;
-  final isEngineSynthesizedTvSelect = key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.gameButtonA;
-  if (event.isPhysicalKeyboardEvent && !isEngineSynthesizedTvSelect) return false;
-
-  return key.isDpadDirection || key.isBackKey || event.isTvSelectEvent;
+  final shouldPass = key.isDpadDirection || key.isBackKey || event.isTvSelectEvent;
+  _logTvTextInput(
+    'native-pass=$shouldPass reason=${shouldPass ? "remote-navigation-key" : "not-navigation-key"} '
+    'key=(${_describeTextInputKey(event)})',
+  );
+  return shouldPass;
 }
 
 KeyEventResult _handleTvHardwareKeyboardKey({
@@ -528,6 +615,9 @@ class _FocusableTextInputHostState extends State<_FocusableTextInputHost> {
   FocusNode? _installedFocusNode;
   FocusOnKeyEventCallback? _previousOnKeyEvent;
   late final FocusOnKeyEventCallback _keyHandler = _handleKey;
+  late final VoidCallback _focusListener = _syncNativeTextInputFocus;
+  final Object _nativeFocusToken = Object();
+  bool _reportedNativeTextInputFocused = false;
 
   FocusNode get _effectiveFocusNode =>
       widget.input.focusNode ?? (_ownedFocusNode ??= FocusNode(debugLabel: 'FocusableTextInput'));
@@ -538,6 +628,7 @@ class _FocusableTextInputHostState extends State<_FocusableTextInputHost> {
     if (oldWidget.input.focusNode != widget.input.focusNode) {
       _restoreInstalledHandler();
     }
+    _syncNativeTextInputFocus();
   }
 
   @override
@@ -547,10 +638,33 @@ class _FocusableTextInputHostState extends State<_FocusableTextInputHost> {
     super.dispose();
   }
 
+  void _syncNativeTextInputFocus() {
+    final focused = _installedFocusNode?.hasFocus == true && widget.input.enabled && widget.input._usesNativeTvKeyboard;
+    _logTvTextInput(
+      'Host.syncNativeTextInputFocus focused=$focused installed=${_installedFocusNode?.debugLabel} '
+      'hasFocus=${_installedFocusNode?.hasFocus} enabled=${widget.input.enabled} '
+      'usesNativeTvKeyboard=${widget.input._usesNativeTvKeyboard}',
+    );
+    _setNativeTextInputFocused(focused);
+  }
+
+  void _setNativeTextInputFocused(bool focused) {
+    if (_reportedNativeTextInputFocused == focused) {
+      _logTvTextInput('Host.setNativeTextInputFocused no-op focused=$focused');
+      return;
+    }
+    _logTvTextInput('Host.setNativeTextInputFocused old=$_reportedNativeTextInputFocused new=$focused');
+    _reportedNativeTextInputFocused = focused;
+    _NativeTvTextInputFocusBridge.setFocused(_nativeFocusToken, focused);
+  }
+
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     final previous = _previousOnKeyEvent;
     if (previous != null && !identical(previous, _keyHandler)) {
       final result = previous(node, event);
+      _logTvTextInput(
+        'Host.previousOnKeyEvent node=${node.debugLabel} result=$result key=(${_describeTextInputKey(event)})',
+      );
       if (result != KeyEventResult.ignored) return result;
     }
     return widget.input._handleKey(context, node, event);
@@ -563,6 +677,7 @@ class _FocusableTextInputHostState extends State<_FocusableTextInputHost> {
       if (identical(node.onKeyEvent, _keyHandler)) return;
       _previousOnKeyEvent = node.onKeyEvent;
       node.onKeyEvent = _keyHandler;
+      _logTvTextInput('Host.reinstalled key handler node=${node.debugLabel} previous=${_previousOnKeyEvent != null}');
       return;
     }
 
@@ -570,12 +685,19 @@ class _FocusableTextInputHostState extends State<_FocusableTextInputHost> {
     _installedFocusNode = node;
     _previousOnKeyEvent = node.onKeyEvent;
     node.onKeyEvent = _keyHandler;
+    node.addListener(_focusListener);
+    _logTvTextInput('Host.installed key handler node=${node.debugLabel} previous=${_previousOnKeyEvent != null}');
   }
 
   void _restoreInstalledHandler() {
+    _logTvTextInput('Host.restoreInstalledHandler node=${_installedFocusNode?.debugLabel}');
+    _setNativeTextInputFocused(false);
     final node = _installedFocusNode;
-    if (node != null && identical(node.onKeyEvent, _keyHandler)) {
-      node.onKeyEvent = _previousOnKeyEvent;
+    if (node != null) {
+      node.removeListener(_focusListener);
+      if (identical(node.onKeyEvent, _keyHandler)) {
+        node.onKeyEvent = _previousOnKeyEvent;
+      }
     }
     _installedFocusNode = null;
     _previousOnKeyEvent = null;
@@ -585,6 +707,7 @@ class _FocusableTextInputHostState extends State<_FocusableTextInputHost> {
   Widget build(BuildContext context) {
     final focusNode = _effectiveFocusNode;
     _installKeyHandler(focusNode);
+    _syncNativeTextInputFocus();
     return widget.builder(widget.input._hasTvKeyboard, focusNode);
   }
 }

@@ -376,6 +376,12 @@ class _TranslationsSettingsEs extends TranslationsSettingsEn {
 	@override String get displaySwitchDelay => 'Retraso de cambio de pantalla';
 	@override String get tunneledPlayback => 'Reproducción tunelizada';
 	@override String get tunneledPlaybackDescription => 'Usar tunelización de video. Desactívala si HDR muestra video negro.';
+	@override String get dvConversionMode => 'Conversión de Dolby Vision';
+	@override String get dvConversionModeDescription => 'Elige cómo ExoPlayer gestiona archivos Dolby Vision Profile 7.';
+	@override String get dvConversionAuto => 'Automático';
+	@override String get dvConversionNative => 'Nativo / desactivado';
+	@override String get dvConversionDv81 => 'P7 → P8.1';
+	@override String get dvConversionHevcStrip => 'P7 → HEVC';
 	@override String get requireProfileSelectionOnOpen => 'Pedir perfil al abrir la app';
 	@override String get requireProfileSelectionOnOpenDescription => 'Mostrar selección de perfil cada vez que se abre la aplicación';
 	@override String get forceTvMode => 'Forzar modo TV';
@@ -569,7 +575,7 @@ class _TranslationsVideoControlsEs extends TranslationsVideoControlsEn {
 	@override String get nextChapterButton => 'Capítulo siguiente';
 	@override String get muteButton => 'Silenciar';
 	@override String get unmuteButton => 'Activar sonido';
-	@override String get settingsButton => 'Ajustes de video';
+	@override String get settingsButton => 'Ajustes de reproducción';
 	@override String get tracksButton => 'Audio y subtítulos';
 	@override String get chaptersButton => 'Capítulos';
 	@override String get versionsButton => 'Versiones de video';
@@ -1296,7 +1302,6 @@ class _TranslationsVideoSettingsEs extends TranslationsVideoSettingsEn {
 	final TranslationsEs _root; // ignore: unused_field
 
 	// Translations
-	@override String get playbackSettings => 'Ajustes de reproducción';
 	@override String get playbackSpeed => 'Velocidad de reproducción';
 	@override String get sleepTimer => 'Temporizador de apagado';
 	@override String get audioSync => 'Sincronización de audio';
@@ -2033,6 +2038,12 @@ extension on TranslationsEs {
 			'settings.displaySwitchDelay' => 'Retraso de cambio de pantalla',
 			'settings.tunneledPlayback' => 'Reproducción tunelizada',
 			'settings.tunneledPlaybackDescription' => 'Usar tunelización de video. Desactívala si HDR muestra video negro.',
+			'settings.dvConversionMode' => 'Conversión de Dolby Vision',
+			'settings.dvConversionModeDescription' => 'Elige cómo ExoPlayer gestiona archivos Dolby Vision Profile 7.',
+			'settings.dvConversionAuto' => 'Automático',
+			'settings.dvConversionNative' => 'Nativo / desactivado',
+			'settings.dvConversionDv81' => 'P7 → P8.1',
+			'settings.dvConversionHevcStrip' => 'P7 → HEVC',
 			'settings.requireProfileSelectionOnOpen' => 'Pedir perfil al abrir la app',
 			'settings.requireProfileSelectionOnOpenDescription' => 'Mostrar selección de perfil cada vez que se abre la aplicación',
 			'settings.forceTvMode' => 'Forzar modo TV',
@@ -2175,7 +2186,7 @@ extension on TranslationsEs {
 			'videoControls.nextChapterButton' => 'Capítulo siguiente',
 			'videoControls.muteButton' => 'Silenciar',
 			'videoControls.unmuteButton' => 'Activar sonido',
-			'videoControls.settingsButton' => 'Ajustes de video',
+			'videoControls.settingsButton' => 'Ajustes de reproducción',
 			'videoControls.tracksButton' => 'Audio y subtítulos',
 			'videoControls.chaptersButton' => 'Capítulos',
 			'videoControls.versionsButton' => 'Versiones de video',
@@ -2301,14 +2312,14 @@ extension on TranslationsEs {
 			'profiles.signOut' => 'Cerrar sesión',
 			'profiles.signOutPlexTitle' => '¿Cerrar sesión de Plex?',
 			'profiles.signOutPlexMessage' => ({required Object displayName}) => '¿Eliminar ${displayName} y todos los usuarios de Plex Home? Puedes iniciar sesión de nuevo cuando quieras.',
+			_ => null,
+		} ?? switch (path) {
 			'profiles.signedOutPlex' => 'Sesión de Plex cerrada.',
 			'profiles.signOutFailed' => 'Error al cerrar sesión.',
 			'profiles.sectionTitle' => 'Perfiles',
 			'profiles.summarySingle' => 'Añade perfiles para mezclar usuarios gestionados e identidades locales',
 			'profiles.summaryMultipleWithActive' => ({required Object count, required Object activeName}) => '${count} perfiles · activo: ${activeName}',
 			'profiles.summaryMultiple' => ({required Object count}) => '${count} perfiles',
-			_ => null,
-		} ?? switch (path) {
 			'profiles.removeConnectionTitle' => '¿Eliminar conexión?',
 			'profiles.removeConnectionMessage' => ({required Object displayName, required Object connectionLabel}) => 'Eliminar el acceso de ${displayName} a ${connectionLabel}. Los demás perfiles lo conservan.',
 			'profiles.deleteProfileTitle' => '¿Eliminar perfil?',
@@ -2775,7 +2786,6 @@ extension on TranslationsEs {
 			'companionRemote.remote.subtitles' => 'Subtítulos',
 			'companionRemote.remote.audio' => 'Audio',
 			'companionRemote.remote.searchHint' => 'Buscar en escritorio...',
-			'videoSettings.playbackSettings' => 'Ajustes de reproducción',
 			'videoSettings.playbackSpeed' => 'Velocidad de reproducción',
 			'videoSettings.sleepTimer' => 'Temporizador de apagado',
 			'videoSettings.audioSync' => 'Sincronización de audio',
@@ -2816,13 +2826,13 @@ extension on TranslationsEs {
 			'metadataEdit.poster' => 'Póster',
 			'metadataEdit.background' => 'Fondo',
 			'metadataEdit.logo' => 'Logo',
+			_ => null,
+		} ?? switch (path) {
 			'metadataEdit.squareArt' => 'Imagen cuadrada',
 			'metadataEdit.selectPoster' => 'Seleccionar póster',
 			'metadataEdit.selectBackground' => 'Seleccionar fondo',
 			'metadataEdit.selectLogo' => 'Seleccionar logo',
 			'metadataEdit.selectSquareArt' => 'Seleccionar imagen cuadrada',
-			_ => null,
-		} ?? switch (path) {
 			'metadataEdit.fromUrl' => 'Desde URL',
 			'metadataEdit.uploadFile' => 'Subir archivo',
 			'metadataEdit.enterImageUrl' => 'Introducir URL de imagen',

@@ -149,6 +149,7 @@ List<MediaAudioTrack> _withDefaultAudioSelection(List<MediaAudioTrack> tracks, i
         displayTitle: track.displayTitle,
         channels: track.channels,
         selected: track.index == defaultStreamIndex,
+        external: track.external,
       ),
   ];
 }
@@ -338,7 +339,7 @@ List<MediaVersion> jellyfinSourcesToVersions(List<dynamic> sources) {
     versions.add(
       jellyfinMediaSourceToVersion(
         src,
-        versionId: i.toString(),
+        versionId: sourceId.isNotEmpty ? sourceId : i.toString(),
         partId: i.toString(),
         streamPath: sourceId,
         name: useName ? src['Name'] as String? : null,

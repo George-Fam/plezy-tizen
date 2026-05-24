@@ -18,6 +18,7 @@ import '../../../utils/formatters.dart';
 import '../../../utils/player_utils.dart';
 import '../../../utils/provider_extensions.dart';
 import '../../app_icon.dart';
+import '../../clickable_cursor.dart';
 import '../../optimized_media_image.dart';
 import 'media_selector_thumbnail.dart';
 
@@ -29,6 +30,7 @@ class ContentStrip extends StatefulWidget {
   final String? serverId;
   final bool showQueueTab;
   final Function(MediaItem)? onQueueItemSelected;
+  final Future<void> Function(Duration position)? onSeekRequested;
   final Function(Duration position)? onSeekCompleted;
 
   /// Whether to use dpad/focus-based navigation (TV mode).
@@ -49,6 +51,7 @@ class ContentStrip extends StatefulWidget {
     this.serverId,
     this.showQueueTab = false,
     this.onQueueItemSelected,
+    this.onSeekRequested,
     this.onSeekCompleted,
     this.useFocusNavigation = false,
     this.onNavigateUp,
@@ -127,7 +130,7 @@ class ContentStripState extends State<ContentStrip> {
 
   Future<void> _handleChapterTap(Duration position) async {
     final clamped = clampSeekPosition(widget.player, position);
-    await widget.player.seek(clamped);
+    await (widget.onSeekRequested ?? widget.player.seek)(clamped);
     if (mounted) {
       widget.onSeekCompleted?.call(clamped);
     }
@@ -168,7 +171,7 @@ class ContentStripState extends State<ContentStrip> {
     });
   }
 
-  KeyEventResult _handleFocusItemKeyEvent(FocusNode node, KeyEvent event, int index, int totalItems, _StripTab page) {
+  KeyEventResult _handleFocusItemKeyEvent(KeyEvent event, int index, int totalItems, _StripTab page) {
     if (!event.isActionable) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
@@ -296,22 +299,24 @@ class ContentStripState extends State<ContentStrip> {
 
   Widget _buildTabLabel(String label, _StripTab tab) {
     final isActive = _activeTab == tab;
-    return GestureDetector(
-      onTap: () => setState(() => _activeTab = tab),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: isActive ? Colors.white : Colors.white54,
-              fontSize: 13,
-              fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+    return ClickableCursor(
+      child: GestureDetector(
+        onTap: () => setState(() => _activeTab = tab),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: isActive ? Colors.white : Colors.white54,
+                fontSize: 13,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Container(height: 2, width: 40, color: isActive ? Colors.white : Colors.transparent),
-        ],
+            const SizedBox(height: 4),
+            Container(height: 2, width: 40, color: isActive ? Colors.white : Colors.transparent),
+          ],
+        ),
       ),
     );
   }
@@ -356,7 +361,6 @@ class ContentStripState extends State<ContentStrip> {
             void onTap() => unawaited(_handleChapterTap(chapter.startTime));
 
             final item = _buildStripItem(
-              context: context,
               isCurrent: isCurrent,
               isTablet: isTablet,
               thumbnail: chapter.thumb != null
@@ -382,8 +386,8 @@ class ContentStripState extends State<ContentStrip> {
                 child: FocusableWrapper(
                   focusNode: _chapterFocusNodes[index],
                   onSelect: onTap,
-                  onKeyEvent: (node, event) =>
-                      _handleFocusItemKeyEvent(node, event, index, widget.chapters.length, _StripTab.chapters),
+                  onKeyEvent: (_, event) =>
+                      _handleFocusItemKeyEvent(event, index, widget.chapters.length, _StripTab.chapters),
                   onFocusChange: (hasFocus) {
                     if (hasFocus) widget.onFocusActivity?.call();
                   },
@@ -438,7 +442,6 @@ class ContentStripState extends State<ContentStrip> {
             void onTap() => widget.onQueueItemSelected?.call(item);
 
             final stripItem = _buildStripItem(
-              context: context,
               isCurrent: isCurrent,
               isTablet: isTablet,
               thumbnail: item.thumbPath != null
@@ -463,8 +466,7 @@ class ContentStripState extends State<ContentStrip> {
                 child: FocusableWrapper(
                   focusNode: _queueFocusNodes[index],
                   onSelect: onTap,
-                  onKeyEvent: (node, event) =>
-                      _handleFocusItemKeyEvent(node, event, index, items.length, _StripTab.queue),
+                  onKeyEvent: (_, event) => _handleFocusItemKeyEvent(event, index, items.length, _StripTab.queue),
                   onFocusChange: (hasFocus) {
                     if (hasFocus) widget.onFocusActivity?.call();
                   },
@@ -496,7 +498,6 @@ class ContentStripState extends State<ContentStrip> {
   }
 
   Widget _buildStripItem({
-    required BuildContext context,
     required bool isCurrent,
     required Widget? thumbnail,
     required String title,
@@ -510,45 +511,47 @@ class ContentStripState extends State<ContentStrip> {
     final subtitleFontSize = isTablet ? 12.0 : 10.0;
 
     final verticalMargin = widget.useFocusNavigation ? 4.0 : 0.0;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: itemWidth,
-        margin: EdgeInsets.symmetric(horizontal: 6, vertical: verticalMargin),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            MediaSelectorThumbnail(
-              width: itemWidth,
-              height: thumbHeight,
-              thumbnail: thumbnail,
-              isCurrent: isCurrent,
-              borderColor: Colors.white,
-              radius: 6,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              title,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: titleFontSize,
-                fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+    return ClickableCursor(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: itemWidth,
+          margin: EdgeInsets.symmetric(horizontal: 6, vertical: verticalMargin),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MediaSelectorThumbnail(
+                width: itemWidth,
+                height: thumbHeight,
+                thumbnail: thumbnail,
+                isCurrent: isCurrent,
+                borderColor: Colors.white,
+                radius: 6,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            Text(
-              subtitle,
-              style: TextStyle(
-                color: isCurrent ? Colors.white70 : Colors.white60,
-                fontSize: subtitleFontSize,
-                fontWeight: isCurrent ? FontWeight.w500 : FontWeight.normal,
+              const SizedBox(height: 4),
+              Text(
+                title,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: titleFontSize,
+                  fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: isCurrent ? Colors.white70 : Colors.white60,
+                  fontSize: subtitleFontSize,
+                  fontWeight: isCurrent ? FontWeight.w500 : FontWeight.normal,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
         ),
       ),
     );

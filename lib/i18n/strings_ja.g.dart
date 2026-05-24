@@ -376,6 +376,12 @@ class _TranslationsSettingsJa extends TranslationsSettingsEn {
 	@override String get displaySwitchDelay => 'ディスプレイ切り替え遅延';
 	@override String get tunneledPlayback => 'トンネル再生';
 	@override String get tunneledPlaybackDescription => '動画トンネリングを使用します。HDR再生で画面が黒くなる場合は無効にしてください。';
+	@override String get dvConversionMode => 'Dolby Vision 変換';
+	@override String get dvConversionModeDescription => 'ExoPlayer が Dolby Vision Profile 7 ファイルを処理する方法を選択します。';
+	@override String get dvConversionAuto => '自動';
+	@override String get dvConversionNative => 'ネイティブ / 無効';
+	@override String get dvConversionDv81 => 'P7 → P8.1';
+	@override String get dvConversionHevcStrip => 'P7 → HEVC';
 	@override String get requireProfileSelectionOnOpen => 'アプリ起動時にプロフィールを確認';
 	@override String get requireProfileSelectionOnOpenDescription => 'アプリを開くたびにプロフィール選択を表示';
 	@override String get forceTvMode => 'TVモードを強制';
@@ -569,7 +575,7 @@ class _TranslationsVideoControlsJa extends TranslationsVideoControlsEn {
 	@override String get nextChapterButton => '次のチャプター';
 	@override String get muteButton => 'ミュート';
 	@override String get unmuteButton => 'ミュート解除';
-	@override String get settingsButton => '動画設定';
+	@override String get settingsButton => '再生設定';
 	@override String get tracksButton => '音声と字幕';
 	@override String get chaptersButton => 'チャプター';
 	@override String get versionsButton => '動画バージョン';
@@ -1296,7 +1302,6 @@ class _TranslationsVideoSettingsJa extends TranslationsVideoSettingsEn {
 	final TranslationsJa _root; // ignore: unused_field
 
 	// Translations
-	@override String get playbackSettings => '再生設定';
 	@override String get playbackSpeed => '再生速度';
 	@override String get sleepTimer => 'スリープタイマー';
 	@override String get audioSync => '音声同期';
@@ -2033,6 +2038,12 @@ extension on TranslationsJa {
 			'settings.displaySwitchDelay' => 'ディスプレイ切り替え遅延',
 			'settings.tunneledPlayback' => 'トンネル再生',
 			'settings.tunneledPlaybackDescription' => '動画トンネリングを使用します。HDR再生で画面が黒くなる場合は無効にしてください。',
+			'settings.dvConversionMode' => 'Dolby Vision 変換',
+			'settings.dvConversionModeDescription' => 'ExoPlayer が Dolby Vision Profile 7 ファイルを処理する方法を選択します。',
+			'settings.dvConversionAuto' => '自動',
+			'settings.dvConversionNative' => 'ネイティブ / 無効',
+			'settings.dvConversionDv81' => 'P7 → P8.1',
+			'settings.dvConversionHevcStrip' => 'P7 → HEVC',
 			'settings.requireProfileSelectionOnOpen' => 'アプリ起動時にプロフィールを確認',
 			'settings.requireProfileSelectionOnOpenDescription' => 'アプリを開くたびにプロフィール選択を表示',
 			'settings.forceTvMode' => 'TVモードを強制',
@@ -2175,7 +2186,7 @@ extension on TranslationsJa {
 			'videoControls.nextChapterButton' => '次のチャプター',
 			'videoControls.muteButton' => 'ミュート',
 			'videoControls.unmuteButton' => 'ミュート解除',
-			'videoControls.settingsButton' => '動画設定',
+			'videoControls.settingsButton' => '再生設定',
 			'videoControls.tracksButton' => '音声と字幕',
 			'videoControls.chaptersButton' => 'チャプター',
 			'videoControls.versionsButton' => '動画バージョン',
@@ -2301,14 +2312,14 @@ extension on TranslationsJa {
 			'profiles.signOut' => 'サインアウト',
 			'profiles.signOutPlexTitle' => 'Plex からサインアウトしますか？',
 			'profiles.signOutPlexMessage' => ({required Object displayName}) => '${displayName}とすべてのPlex Homeユーザーを削除しますか？いつでも再サインインできます。',
+			_ => null,
+		} ?? switch (path) {
 			'profiles.signedOutPlex' => 'Plex からサインアウトしました。',
 			'profiles.signOutFailed' => 'サインアウトに失敗しました。',
 			'profiles.sectionTitle' => 'プロファイル',
 			'profiles.summarySingle' => 'プロファイルを追加して、管理対象ユーザーとローカルIDを混在させます',
 			'profiles.summaryMultipleWithActive' => ({required Object count, required Object activeName}) => '${count}個のプロファイル · アクティブ: ${activeName}',
 			'profiles.summaryMultiple' => ({required Object count}) => '${count}個のプロファイル',
-			_ => null,
-		} ?? switch (path) {
 			'profiles.removeConnectionTitle' => '接続を削除しますか？',
 			'profiles.removeConnectionMessage' => ({required Object displayName, required Object connectionLabel}) => '${displayName}の${connectionLabel}へのアクセスを削除します。他のプロフィールには残ります。',
 			'profiles.deleteProfileTitle' => 'プロファイルを削除しますか？',
@@ -2775,7 +2786,6 @@ extension on TranslationsJa {
 			'companionRemote.remote.subtitles' => '字幕',
 			'companionRemote.remote.audio' => '音声',
 			'companionRemote.remote.searchHint' => 'デスクトップで検索...',
-			'videoSettings.playbackSettings' => '再生設定',
 			'videoSettings.playbackSpeed' => '再生速度',
 			'videoSettings.sleepTimer' => 'スリープタイマー',
 			'videoSettings.audioSync' => '音声同期',
@@ -2816,13 +2826,13 @@ extension on TranslationsJa {
 			'metadataEdit.poster' => 'ポスター',
 			'metadataEdit.background' => '背景',
 			'metadataEdit.logo' => 'ロゴ',
+			_ => null,
+		} ?? switch (path) {
 			'metadataEdit.squareArt' => '正方形アート',
 			'metadataEdit.selectPoster' => 'ポスターを選択',
 			'metadataEdit.selectBackground' => '背景を選択',
 			'metadataEdit.selectLogo' => 'ロゴを選択',
 			'metadataEdit.selectSquareArt' => '正方形アートを選択',
-			_ => null,
-		} ?? switch (path) {
 			'metadataEdit.fromUrl' => 'URLから',
 			'metadataEdit.uploadFile' => 'ファイルをアップロード',
 			'metadataEdit.enterImageUrl' => '画像URLを入力',

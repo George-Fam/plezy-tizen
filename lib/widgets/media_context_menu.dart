@@ -20,6 +20,7 @@ import '../models/transcode_quality_preset.dart';
 import '../utils/download_version_utils.dart';
 import '../utils/download_utils.dart';
 import '../utils/quality_preset_labels.dart';
+import '../utils/media_version_resolver.dart';
 import '../utils/global_key_utils.dart';
 import '../providers/download_provider.dart';
 import '../providers/multi_server_provider.dart';
@@ -30,6 +31,7 @@ import '../profiles/profile.dart';
 import '../utils/provider_extensions.dart';
 import '../utils/app_logger.dart';
 import '../utils/library_refresh_notifier.dart';
+import '../utils/media_server_http_client.dart';
 import '../utils/platform_detector.dart';
 import '../utils/snackbar_helper.dart';
 import '../utils/dialogs.dart';
@@ -118,6 +120,16 @@ class MediaContextMenuState extends State<MediaContextMenu> {
   bool _isContextMenuOpen = false;
 
   bool get isContextMenuOpen => _isContextMenuOpen;
+
+  void _notifyRefresh(String itemId) {
+    if (!mounted) return;
+    widget.onRefresh?.call(itemId);
+  }
+
+  void _notifyListRefresh() {
+    if (!mounted) return;
+    widget.onListRefresh?.call();
+  }
 
   /// The widget's [item] cast as a [MediaItem]. Returns `null` for playlists.
   MediaItem? get _mediaItem => widget.item is MediaItem ? widget.item as MediaItem : null;
@@ -543,7 +555,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
             await offlineWatch.markAsWatched(serverId: mediaItem!.serverId!, itemId: mediaItem.id);
             if (context.mounted) {
               showAppSnackBar(context, t.messages.markedAsWatchedOffline);
-              widget.onRefresh?.call(mediaItem.id);
+              _notifyRefresh(mediaItem.id);
             }
           } else {
             // Resolve the right backend client — Plex hits scrobble, Jellyfin
@@ -568,7 +580,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
             await offlineWatch.markAsUnwatched(serverId: mediaItem!.serverId!, itemId: mediaItem.id);
             if (context.mounted) {
               showAppSnackBar(context, t.messages.markedAsUnwatchedOffline);
-              widget.onRefresh?.call(mediaItem.id);
+              _notifyRefresh(mediaItem.id);
             }
           } else {
             await _executeAction(context, () async {
@@ -594,7 +606,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
               if (widget.onRemoveFromContinueWatching != null) {
                 widget.onRemoveFromContinueWatching!();
               } else {
-                widget.onRefresh?.call(mediaItem.id);
+                _notifyRefresh(mediaItem.id);
               }
             }
           } catch (e) {
@@ -620,22 +632,21 @@ class MediaContextMenuState extends State<MediaContextMenu> {
         case 'edit_metadata':
           didNavigate = true;
           if (context.mounted) {
+            final item = mediaItem!;
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => PlexMetadataEditScreen(metadata: mediaItem!)),
+              MaterialPageRoute(builder: (context) => PlexMetadataEditScreen(metadata: item)),
             );
-            widget.onRefresh?.call(mediaItem!.id);
+            _notifyRefresh(item.id);
           }
           break;
 
         case 'match':
           didNavigate = true;
           if (context.mounted) {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => PlexMatchScreen(metadata: mediaItem!)),
-            );
-            widget.onRefresh?.call(mediaItem!.id);
+            final item = mediaItem!;
+            await Navigator.push(context, MaterialPageRoute(builder: (context) => PlexMatchScreen(metadata: item)));
+            _notifyRefresh(item.id);
           }
           break;
 
@@ -652,7 +663,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           await _navigateToRelated(
             context,
             mediaItem!.kind == MediaKind.season ? mediaItem.parentId : mediaItem.grandparentId,
-            (item) => MediaDetailScreen(metadata: item),
+            (item) => mediaDetailRoute(metadata: item),
             t.messages.errorLoadingSeries,
           );
           break;
@@ -665,7 +676,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           await _navigateToRelated(
             context,
             seasonParentKey,
-            (show) => MediaDetailScreen(metadata: show, initialSeasonIndex: seasonIndex),
+            (show) => mediaDetailRoute(metadata: show, initialSeasonIndex: seasonIndex),
             t.messages.errorLoadingSeason,
           );
           break;
@@ -751,7 +762,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
       await action();
       if (context.mounted) {
         showSuccessSnackBar(context, successMessage);
-        widget.onRefresh?.call(_itemId());
+        _notifyRefresh(_itemId());
       }
     } catch (e) {
       if (context.mounted) {
@@ -783,7 +794,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
       if (!context.mounted) return;
       if (success) {
         showSuccessSnackBar(context, t.matchScreen.unmatchSuccess);
-        widget.onRefresh?.call(item.id);
+        _notifyRefresh(item.id);
       } else {
         showErrorSnackBar(context, t.matchScreen.unmatchFailed);
       }
@@ -798,18 +809,19 @@ class MediaContextMenuState extends State<MediaContextMenu> {
   Future<void> _navigateToRelated(
     BuildContext context,
     String? id,
-    Widget Function(MediaItem) screenBuilder,
+    Route<Object?> Function(MediaItem) routeBuilder,
     String errorPrefix,
   ) async {
     if (id == null) return;
 
     final client = _getMediaClientForItem();
+    final refreshItemId = _itemId();
 
     try {
       final metadata = await client.fetchItem(id);
       if (metadata != null && context.mounted) {
-        await Navigator.push(context, MaterialPageRoute(builder: (context) => screenBuilder(metadata)));
-        widget.onRefresh?.call(_itemId());
+        await Navigator.push(context, routeBuilder(metadata));
+        _notifyRefresh(refreshItemId);
       }
     } catch (e) {
       if (context.mounted) {
@@ -859,13 +871,12 @@ class MediaContextMenuState extends State<MediaContextMenu> {
 
   Future<bool> _handlePlayVersion(BuildContext context) async {
     final item = _mediaItem!;
+    final client = context.tryGetMediaClientForServer(_itemServerId);
     // Same flag the in-player Version & Quality sheet reads — keeps both
     // surfaces honest about what the active backend can actually do.
-    final canTranscode = _itemServerId == null
-        ? false
-        : (context.read<MultiServerProvider>().getClientForServer(_itemServerId!)?.capabilities.videoTranscoding ??
-              false);
-    final versions = item.mediaVersions ?? const [];
+    final canTranscode = client?.capabilities.videoTranscoding ?? false;
+    final versions = client == null ? item.mediaVersions ?? const [] : await resolveMediaVersions(item, client);
+    if (!context.mounted) return false;
 
     int selectedVersionIndex = 0;
     if (versions.length > 1) {
@@ -874,9 +885,9 @@ class MediaContextMenuState extends State<MediaContextMenu> {
       selectedVersionIndex = picked;
     }
 
+    final selectedVersion = selectedVersionIndex < versions.length ? versions[selectedVersionIndex] : null;
     TranscodeQualityPreset selectedQuality = TranscodeQualityPreset.original;
     if (canTranscode) {
-      final selectedVersion = selectedVersionIndex < versions.length ? versions[selectedVersionIndex] : null;
       final picked = await showQualityPickerDialog(
         context,
         sourceBitrateKbps: selectedVersion?.bitrate,
@@ -891,6 +902,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
       context,
       metadata: item,
       selectedMediaIndex: selectedVersionIndex,
+      selectedMediaSourceId: selectedVersion?.id,
       selectedQualityPreset: selectedQuality,
     );
     return true;
@@ -945,13 +957,9 @@ class MediaContextMenuState extends State<MediaContextMenu> {
     try {
       final item = _mediaItem!;
 
-      final playlists = await client.fetchPlaylists(playlistType: 'video');
-
-      if (!context.mounted) return;
-
       final result = await showDialog<String>(
         context: context,
-        builder: (context) => _PlaylistSelectionDialog(playlists: playlists),
+        builder: (context) => _PlaylistSelectionDialog(client: client),
       );
 
       if (result == null || !context.mounted) return;
@@ -1050,14 +1058,12 @@ class MediaContextMenuState extends State<MediaContextMenu> {
         }
         return;
       }
-
-      final collections = await client.fetchCollections(libraryId);
-
+      final resolvedLibraryId = libraryId;
       if (!context.mounted) return;
 
       final result = await showDialog<String>(
         context: context,
-        builder: (context) => _CollectionSelectionDialog(collections: collections),
+        builder: (context) => _CollectionSelectionDialog(client: client, libraryId: resolvedLibraryId),
       );
 
       if (result == null || !context.mounted) return;
@@ -1076,7 +1082,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
 
         appLogger.d('Creating collection "$collectionName" seeded with item ${item.id}');
         final newCollectionId = await client.createCollection(
-          libraryId: libraryId,
+          libraryId: resolvedLibraryId,
           title: collectionName,
           items: [item],
           itemKind: itemKind,
@@ -1127,11 +1133,8 @@ class MediaContextMenuState extends State<MediaContextMenu> {
     await OverlaySheetController.showAdaptive(
       context,
       showDragHandle: true,
-      builder: (context) => RatingBottomSheet(
-        item: item,
-        serverClient: client,
-        onServerRatingChanged: (_) => widget.onRefresh?.call(item.id),
-      ),
+      builder: (context) =>
+          RatingBottomSheet(item: item, serverClient: client, onServerRatingChanged: (_) => _notifyRefresh(item.id)),
     );
   }
 
@@ -1162,7 +1165,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           // Trigger refresh of collections tab
           LibraryRefreshNotifier().notifyCollectionsChanged();
           // Trigger list refresh to remove the item from the view
-          widget.onListRefresh?.call();
+          _notifyListRefresh();
         } else {
           showErrorSnackBar(context, t.collections.removeFromCollectionFailed);
         }
@@ -1227,7 +1230,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
         if (success) {
           showSuccessSnackBar(context, isCollection ? t.collections.deleted : t.playlists.deleted);
           // Trigger list refresh
-          widget.onListRefresh?.call();
+          _notifyListRefresh();
         } else {
           showErrorSnackBar(context, isCollection ? t.collections.deleteFailed : t.playlists.errorDeleting);
         }
@@ -1399,7 +1402,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
         // DownloadProvider.deleteDownload now broadcasts the DeletionEvent,
         // so DeletionAware screens (e.g. offline season detail) update without
         // a duplicate notification here.
-        widget.onRefresh?.call(item.id);
+        _notifyRefresh(item.id);
       }
     } catch (e) {
       appLogger.e('Failed to delete download', error: e);
@@ -1498,7 +1501,7 @@ class MediaContextMenuState extends State<MediaContextMenu> {
           // Broadcast deletion event for cross-screen propagation
           DeletionNotifier().notifyDeletedItem(item: item);
           // Backward-compatible list refresh for screens that are not DeletionAware yet
-          widget.onListRefresh?.call();
+          _notifyListRefresh();
         } else {
           showErrorSnackBar(context, t.mediaMenu.mediaFailedToDelete);
         }
@@ -1520,11 +1523,78 @@ class MediaContextMenuState extends State<MediaContextMenu> {
   }
 }
 
-/// Dialog to select a playlist or create a new one
-class _PlaylistSelectionDialog extends StatelessWidget {
-  final List<MediaPlaylist> playlists;
+/// Dialog to select a playlist or create a new one.
+class _PlaylistSelectionDialog extends StatefulWidget {
+  final MediaServerClient client;
 
-  const _PlaylistSelectionDialog({required this.playlists});
+  const _PlaylistSelectionDialog({required this.client});
+
+  @override
+  State<_PlaylistSelectionDialog> createState() => _PlaylistSelectionDialogState();
+}
+
+class _PlaylistSelectionDialogState extends State<_PlaylistSelectionDialog> {
+  static const int _pageSize = 100;
+
+  final AbortController _abortController = AbortController();
+  final ScrollController _scrollController = ScrollController();
+  final List<MediaPlaylist> _playlists = [];
+  bool _isLoading = false;
+  String? _errorMessage;
+  int? _totalCount;
+
+  bool get _hasMore => _totalCount == null || _playlists.length < _totalCount!;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    unawaited(_loadNextPage());
+  }
+
+  @override
+  void dispose() {
+    _abortController.abort();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || !_hasMore || _isLoading) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 240) {
+      unawaited(_loadNextPage());
+    }
+  }
+
+  Future<void> _loadNextPage() async {
+    if (_isLoading || !_hasMore) return;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      final page = await widget.client.fetchPlaylistsPage(
+        playlistType: 'video',
+        smart: false,
+        start: _playlists.length,
+        size: _pageSize,
+        abort: _abortController,
+      );
+      if (!mounted) return;
+      setState(() {
+        _playlists.addAll(page.items);
+        _totalCount = page.totalCount;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1533,8 +1603,9 @@ class _PlaylistSelectionDialog extends StatelessWidget {
       content: SizedBox(
         width: double.maxFinite,
         child: ListView.builder(
+          controller: _scrollController,
           shrinkWrap: true,
-          itemCount: playlists.length + 1,
+          itemCount: _playlists.length + 1 + (_hasMore || _isLoading || _errorMessage != null ? 1 : 0),
           itemBuilder: (context, index) {
             if (index == 0) {
               // Create new playlist option (always shown first)
@@ -1545,10 +1616,28 @@ class _PlaylistSelectionDialog extends StatelessWidget {
               );
             }
 
-            final playlist = playlists[index - 1];
-            final subtitleText = playlist.leafCount == 1
-                ? t.playlists.oneItem
-                : t.playlists.itemCount(count: playlist.leafCount!);
+            if (index > _playlists.length) {
+              if (_errorMessage != null) {
+                return ListTile(
+                  leading: const AppIcon(Symbols.error_rounded, fill: 1),
+                  title: Text(t.messages.errorLoading(error: _errorMessage!)),
+                  trailing: TextButton(onPressed: _loadNextPage, child: Text(t.common.retry)),
+                );
+              }
+              if (_hasMore && !_isLoading) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) unawaited(_loadNextPage());
+                });
+              }
+              return const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+
+            final playlist = _playlists[index - 1];
+            final leafCount = playlist.leafCount;
+            final subtitleText = leafCount == 1 ? t.playlists.oneItem : t.playlists.itemCount(count: leafCount ?? 0);
             return ListTile(
               leading: playlist.smart
                   ? const AppIcon(Symbols.auto_awesome_rounded, fill: 1)
@@ -1576,34 +1665,104 @@ class _PlaylistSelectionDialog extends StatelessWidget {
 
 /// Dialog to select a collection or create a new one
 class _CollectionSelectionDialog extends StatefulWidget {
-  final List<MediaItem> collections;
+  final MediaServerClient client;
+  final String libraryId;
 
-  const _CollectionSelectionDialog({required this.collections});
+  const _CollectionSelectionDialog({required this.client, required this.libraryId});
 
   @override
   State<_CollectionSelectionDialog> createState() => _CollectionSelectionDialogState();
 }
 
 class _CollectionSelectionDialogState extends State<_CollectionSelectionDialog> with ControllerDisposerMixin {
+  static const int _pageSize = 100;
+
   late final _filterController = createTextEditingController();
   final _filterFocusNode = FocusNode(debugLabel: 'CollectionFilter');
   final _firstCollectionFocusNode = FocusNode(debugLabel: 'CollectionFirstItem');
-  late List<MediaItem> _filteredCollections = widget.collections;
+  final AbortController _abortController = AbortController();
+  final _scrollController = ScrollController();
+  final List<MediaItem> _collections = [];
+  List<MediaItem> _filteredCollections = [];
+  bool _isLoading = false;
+  String? _errorMessage;
+  int? _totalCount;
+
+  bool get _hasMore => _totalCount == null || _collections.length < _totalCount!;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    unawaited(_loadNextPage());
+  }
 
   @override
   void dispose() {
+    _abortController.abort();
+    _scrollController.dispose();
     _filterFocusNode.dispose();
     _firstCollectionFocusNode.dispose();
     super.dispose();
   }
 
-  void _onFilterChanged(String query) {
-    final lower = query.toLowerCase();
+  void _onScroll() {
+    if (!_scrollController.hasClients || !_hasMore || _isLoading) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 240) {
+      unawaited(_loadNextPage());
+    }
+  }
+
+  Future<void> _loadNextPage() async {
+    if (_isLoading || !_hasMore) return;
     setState(() {
-      _filteredCollections = lower.isEmpty
-          ? widget.collections
-          : widget.collections.where((c) => (c.title ?? '').toLowerCase().contains(lower)).toList();
+      _isLoading = true;
+      _errorMessage = null;
     });
+    try {
+      while (mounted && _hasMore) {
+        final page = await widget.client.fetchCollectionsPage(
+          widget.libraryId,
+          start: _collections.length,
+          size: _pageSize,
+          abort: _abortController,
+        );
+        if (!mounted) return;
+        setState(() {
+          _collections.addAll(page.items);
+          _totalCount = page.totalCount;
+          _applyFilter(_filterController.text);
+        });
+        if (_filterController.text.isEmpty || page.items.isEmpty) break;
+      }
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _onFilterChanged(String query) {
+    setState(() {
+      _applyFilter(query);
+    });
+    if (query.isNotEmpty && _hasMore) {
+      unawaited(_loadNextPage());
+    }
+  }
+
+  void _applyFilter(String query) {
+    final lower = query.toLowerCase();
+    _filteredCollections = lower.isEmpty
+        ? List.of(_collections)
+        : _collections.where((c) => (c.title ?? '').toLowerCase().contains(lower)).toList();
   }
 
   @override
@@ -1615,7 +1774,7 @@ class _CollectionSelectionDialogState extends State<_CollectionSelectionDialog> 
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (widget.collections.length >= 10) ...[
+            if (_collections.length >= 10) ...[
               FocusableTextField(
                 controller: _filterController,
                 focusNode: _filterFocusNode,
@@ -1632,16 +1791,36 @@ class _CollectionSelectionDialogState extends State<_CollectionSelectionDialog> 
             ],
             Flexible(
               child: ListView.builder(
+                controller: _scrollController,
                 shrinkWrap: true,
-                itemCount: _filteredCollections.length + 1,
+                itemCount: _filteredCollections.length + 1 + (_hasMore || _isLoading || _errorMessage != null ? 1 : 0),
                 itemBuilder: (context, index) {
                   if (index == 0) {
                     return FocusableListTile(
                       focusNode: _firstCollectionFocusNode,
-                      autofocus: widget.collections.length < 10,
+                      autofocus: _collections.length < 10,
                       leading: const AppIcon(Symbols.add_rounded, fill: 1),
                       title: Text(t.common.createNew),
                       onTap: () => Navigator.pop(context, '_create_new'),
+                    );
+                  }
+
+                  if (index > _filteredCollections.length) {
+                    if (_errorMessage != null) {
+                      return FocusableListTile(
+                        leading: const AppIcon(Symbols.error_rounded, fill: 1),
+                        title: Text(t.messages.errorLoading(error: _errorMessage!)),
+                        onTap: _loadNextPage,
+                      );
+                    }
+                    if (_hasMore && !_isLoading) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) unawaited(_loadNextPage());
+                      });
+                    }
+                    return const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator()),
                     );
                   }
 

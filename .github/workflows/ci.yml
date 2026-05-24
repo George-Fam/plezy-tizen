@@ -23,6 +23,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
+          flutter-version: "3.44.0"
           cache: true
           pub-cache: false
 
@@ -40,7 +41,7 @@ jobs:
 
       - name: Verify generated files committed
         run: |
-          dart run build_runner build --delete-conflicting-outputs
+          scripts/codegen.sh
           if ! git diff --exit-code lib/; then
             echo "::error::Generated files (.g.dart / .freezed.dart) are out of date."
             echo "Run 'scripts/codegen.sh' and commit the result."
@@ -114,6 +115,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
+          flutter-version: "3.44.0"
           cache: true
           pub-cache: false
 
@@ -168,6 +170,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
+          flutter-version: "3.44.0"
           cache: true
           pub-cache: false
 

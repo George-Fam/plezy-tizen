@@ -13,6 +13,10 @@ class PlaybackInitializationOptions {
   /// Picks among multiple `MediaSources[]` versions when an item has them.
   final int selectedMediaIndex;
 
+  /// Stable backend source id for the selected media version. Jellyfin merged
+  /// versions can reorder between item fetches, so this wins over index there.
+  final String? selectedMediaSourceId;
+
   /// Transcode preset. `original` means direct-play; anything else asks the
   /// server to transcode when supported.
   final TranscodeQualityPreset qualityPreset;
@@ -31,6 +35,7 @@ class PlaybackInitializationOptions {
   const PlaybackInitializationOptions({
     required this.metadata,
     required this.selectedMediaIndex,
+    this.selectedMediaSourceId,
     this.qualityPreset = TranscodeQualityPreset.original,
     this.selectedAudioStreamId,
     this.sessionIdentifier,
@@ -55,14 +60,13 @@ class PlaybackInitializationResult {
   final List<SubtitleTrack> externalSubtitles;
   final bool isOffline;
 
-  /// `true` when [videoUrl] is a Plex transcode start URL.
+  /// `true` when [videoUrl] points at a backend transcoding stream.
   final bool isTranscoding;
 
   /// Non-null when a non-original preset was requested but fallback kicked in.
   final TranscodeFallbackReason? fallbackReason;
 
-  /// The Plex audio stream ID actually passed to the transcoder (`null` when
-  /// not transcoding or when no audio stream was selectable).
+  /// Source audio stream ID selected by the backend (`null` when unknown).
   final int? activeAudioStreamId;
 
   /// Server playback session ID that must be echoed in progress/stop reports.

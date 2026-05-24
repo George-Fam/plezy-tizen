@@ -21,7 +21,7 @@ extension _VideoPlayerCompanionRemoteMethods on VideoPlayerScreenState {
         return;
       }
       final target = clampSeekPosition(player!, player!.state.position + Duration(seconds: seekSeconds));
-      await player!.seek(target);
+      await _seekPlayback(target);
     };
     receiver.onSeekBackward = () async {
       if (player == null) return;
@@ -32,7 +32,7 @@ extension _VideoPlayerCompanionRemoteMethods on VideoPlayerScreenState {
         return;
       }
       final target = clampSeekPosition(player!, player!.state.position - Duration(seconds: seekSeconds));
-      await player!.seek(target);
+      await _seekPlayback(target);
     };
     receiver.onVolumeUp = () async {
       if (player == null) return;
@@ -102,7 +102,7 @@ extension _VideoPlayerCompanionRemoteMethods on VideoPlayerScreenState {
   void _cycleAudioTrack() => _trackManager?.cycleAudioTrack();
 
   Future<void> _toggleFullscreen() async {
-    if (PlatformDetector.isMobile(context)) return;
+    if (!PlatformDetector.isDesktopOS()) return;
     await FullscreenStateManager().toggleFullscreen();
   }
 }

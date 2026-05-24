@@ -6,7 +6,12 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.media.AudioDeviceInfo
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -19,6 +24,7 @@ import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -30,14 +36,18 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.text.Cue
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cronet.CronetDataSource
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioCapabilities
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -120,8 +130,9 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
   private var tunnelingUserEnabled: Boolean = true
   private var tunnelingDisabledForAudioCodec: Boolean = false
   private var tunnelingDisabledForVideoCodec: Boolean = false
+  private var tunnelingDisabledForDecodedTrueHdPcm: Boolean = false
   private val tunnelingDisabledForCodec: Boolean
-    get() = tunnelingDisabledForAudioCodec || tunnelingDisabledForVideoCodec
+    get() = tunnelingDisabledForAudioCodec || tunnelingDisabledForVideoCodec || tunnelingDisabledForDecodedTrueHdPcm
   private var currentTunneledPlayback: Boolean = false
   private var lastSeekable: Boolean? = null
 
@@ -138,6 +149,8 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
   private var decoderInitName: String? = null
   private var audioDecoderInitName: String? = null
   private var loggedEwasteEac3Workaround: Boolean = false
+  private var lastTrueHdDirectOutputLogKey: String? = null
+  private var loggedDecodedTrueHdTunnelingGuard: Boolean = false
   private var firstFrameRendered: Boolean = false
   var delegate: ExoPlayerDelegate? = null
   var debugLoggingEnabled: Boolean = false
@@ -177,6 +190,35 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
   private var selectedSubtitleTrackId: String? = null
   private val audioTrackGroupMap = mutableMapOf<String, TrackGroup>()
   private val subtitleTrackGroupMap = mutableMapOf<String, TrackGroup>()
+  private var pendingDvTrackRestore: PendingTrackRestore? = null
+
+  private data class PendingTrackRestore(
+    val audio: TrackRestoreIdentity?,
+    val subtitle: TrackRestoreIdentity?,
+    val subtitleDisabled: Boolean
+  )
+
+  private data class TrackRestoreIdentity(
+    val type: Int,
+    val groupIndex: Int,
+    val trackIndex: Int,
+    val formatId: String?,
+    val label: String?,
+    val language: String?,
+    val sampleMimeType: String?,
+    val codecs: String?,
+    val channelCount: Int,
+    val sampleRate: Int,
+    val selectionFlags: Int
+  )
+
+  private data class TrackRestoreMatch(
+    val group: Tracks.Group,
+    val trackGroup: TrackGroup,
+    val trackIndex: Int,
+    val format: Format,
+    val score: Int
+  )
 
   private fun emitLog(level: String, prefix: String, message: String) {
     when (level) {
@@ -374,7 +416,6 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
       trackSelector = DefaultTrackSelector(activity).apply {
         setParameters(
           buildUponParameters()
-            .setTunnelingEnabled(tunnelingUserEnabled)
             // Recover passthrough when HDMI capabilities flap (Shield refresh-rate / AVR link drop):
             // the sink temporarily falls back to PCM, and this flag lets the selector re-pick the
             // encoded audio track when capabilities come back. See androidx/media#2258.
@@ -385,13 +426,13 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
       }
 
       // Create ExoPlayer with FFmpeg audio decoder fallback
-      val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
-        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-        .setUsage(C.USAGE_MEDIA)
-        .build()
+      val audioAttributes = buildMovieAudioAttributes()
 
       // Use DefaultRenderersFactory with FFmpeg fallback for unsupported or blocked audio codecs.
       val renderersFactory = PlezyRenderersFactory(activity).apply {
+        audioDiagnosticsLogger = { level, prefix, message -> emitLog(level, prefix, message) }
+        shouldBlockDirectTrueHd = { format -> this@ExoPlayerCore.shouldBlockDirectTrueHd(format, "sink support") }
+        onAudioCapabilitiesChanged = { updateAudioDecoderPolicy("audio capabilities changed") }
         setEnableDecoderFallback(true)
         setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
@@ -407,6 +448,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
         }
       }
       this.renderersFactory = renderersFactory
+      updateAudioDecoderPolicy("initialize")
 
       // Cronet DataSource for HTTP/2 multiplexing — all range requests share one connection
       httpDataSourceFactory = CronetDataSource.Factory(getCronetEngine(activity), cronetExecutor)
@@ -438,7 +480,9 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
             extractor is MatroskaExtractor -> {
               val assExtractor = ZlibMatroskaExtractor(assParserFactory, handler)
               val inner = if (doviEnabled) {
-                DoviExtractorWrapper(assExtractor, currentDvMode).also {
+                DoviExtractorWrapper(assExtractor, currentDvMode) { level, prefix, message ->
+                  emitLog(level, prefix, message)
+                }.also {
                   activeDoviMkvWrapper = it
                 }
               } else {
@@ -448,7 +492,9 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
               CuelessSeekExtractorWrapper(inner)
             }
             doviEnabled && (extractor is Mp4Extractor || extractor is FragmentedMp4Extractor) -> {
-              DoviExtractorWrapper(extractor, currentDvMode).also {
+              DoviExtractorWrapper(extractor, currentDvMode) { level, prefix, message ->
+                emitLog(level, prefix, message)
+              }.also {
                 activeDoviMp4Wrapper = it
               }
             }
@@ -771,21 +817,6 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
 
   override fun onTracksChanged(tracks: Tracks) {
     Log.d(TAG, "onTracksChanged")
-    // Log selected video and audio track details
-    val videoGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
-    val audioGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
-    if (videoGroup != null) {
-      val vf = videoGroup.mediaTrackGroup.getFormat(0)
-      val hdr = vf.colorInfo?.let { ci ->
-        val transfer = ci.colorTransfer
-        if (transfer != null && transfer != 0) " HDR(transfer=$transfer)" else ""
-      } ?: ""
-      emitLog("info", "tracks", "Video: ${vf.codecs} ${vf.width}x${vf.height}$hdr")
-    }
-    if (audioGroup != null) {
-      val af = audioGroup.mediaTrackGroup.getFormat(0)
-      emitLog("info", "tracks", "Audio: ${af.codecs} ${af.channelCount}ch ${af.sampleRate}Hz")
-    }
     // Detect video track present but deselected (unsupported codec — plays audio only)
     val hasAnyVideoGroup = tracks.groups.any { it.type == C.TRACK_TYPE_VIDEO }
     val hasSelectedVideo = tracks.groups.any { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
@@ -800,6 +831,27 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
         errorMessage = "Video track present but no decoder available"
       )
       return
+    }
+
+    if (restorePendingDvTrackSelection(tracks)) return
+
+    // Log selected video and audio track details
+    val videoGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
+    val audioGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+    if (videoGroup != null) {
+      val vf = videoGroup.mediaTrackGroup.getFormat(0)
+      val hdr = vf.colorInfo?.let { ci ->
+        val transfer = ci.colorTransfer
+        if (transfer != null && transfer != 0) " HDR(transfer=$transfer)" else ""
+      } ?: ""
+      emitLog("info", "tracks", "Video: ${vf.codecs} ${vf.width}x${vf.height}$hdr")
+    }
+    if (audioGroup != null) {
+      val af = audioGroup.mediaTrackGroup.getFormat(0)
+      emitLog("info", "tracks", "Audio: ${formatAudioSummary(af)}")
+      if (af.sampleMimeType == MimeTypes.AUDIO_TRUEHD) {
+        updateAudioDecoderPolicy("tracks changed", af)
+      }
     }
 
     evaluateAudioCodecForTunneling()
@@ -876,7 +928,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     if (debugDvModeOverride == DvConversionMode.DISABLED) return false
     if (dvMode != DvConversionMode.DISABLED) return false
     if (!DoviBridge.isAvailable()) return false
-    val uri = currentMediaUri ?: return false
+    if (currentMediaUri == null) return false
 
     dv7RetryAttempted = true
     val newMode = DoviBridge.getDv7FallbackMode()
@@ -884,13 +936,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     Log.i(TAG, "Native DV7 playback failed ($reason), retrying with $newMode")
     emitLog("info", "dv-fallback", "DV7 native failed ($reason), retrying as $newMode")
 
-    open(
-      uri = uri,
-      headers = currentHeaders,
-      startPositionMs = lastPosition,
-      autoPlay = true
-    )
-    return true
+    return reloadCurrentMediaForDvMode()
   }
 
   override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -1082,7 +1128,236 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     delegate?.onPropertyChange("track-list", trackList)
   }
 
-  // Tunneling control — disabled when audio codec has no hardware decoder (requires FFmpeg)
+  private fun captureDvTrackRestore(): PendingTrackRestore? {
+    val tracks = exoPlayer?.currentTracks ?: return null
+    val audio = captureSelectedTrackIdentity(tracks, C.TRACK_TYPE_AUDIO)
+      ?: captureMappedTrackIdentity(selectedAudioTrackId, audioTrackGroupMap, C.TRACK_TYPE_AUDIO)
+    val subtitle = captureSelectedTrackIdentity(tracks, C.TRACK_TYPE_TEXT)
+      ?: captureMappedTrackIdentity(selectedSubtitleTrackId, subtitleTrackGroupMap, C.TRACK_TYPE_TEXT)
+    val subtitleDisabled = subtitle == null && selectedSubtitleTrackId == "no"
+
+    if (audio == null && subtitle == null && !subtitleDisabled) return null
+    return PendingTrackRestore(audio, subtitle, subtitleDisabled)
+  }
+
+  private fun captureSelectedTrackIdentity(tracks: Tracks, type: Int): TrackRestoreIdentity? {
+    var typeGroupIndex = 0
+    for (group in tracks.groups) {
+      if (group.type != type) continue
+      val trackIndex = selectedTrackIndex(group)
+      if (trackIndex != null) {
+        return buildTrackRestoreIdentity(type, typeGroupIndex, trackIndex, group.mediaTrackGroup.getFormat(trackIndex))
+      }
+      typeGroupIndex++
+    }
+    return null
+  }
+
+  private fun captureMappedTrackIdentity(
+    trackId: String?,
+    trackMap: Map<String, TrackGroup>,
+    type: Int
+  ): TrackRestoreIdentity? {
+    if (trackId == null || trackId == "no") return null
+    val trackGroup = trackMap[trackId] ?: return null
+    if (trackGroup.length == 0) return null
+    val groupIndex = trackId.substringAfter('_', "").toIntOrNull() ?: -1
+    return buildTrackRestoreIdentity(type, groupIndex, 0, trackGroup.getFormat(0))
+  }
+
+  private fun selectedTrackIndex(group: Tracks.Group): Int? {
+    if (!group.isSelected) return null
+    for (trackIndex in 0 until group.mediaTrackGroup.length) {
+      if (group.isTrackSelected(trackIndex)) return trackIndex
+    }
+    return if (group.mediaTrackGroup.length > 0) 0 else null
+  }
+
+  private fun buildTrackRestoreIdentity(
+    type: Int,
+    groupIndex: Int,
+    trackIndex: Int,
+    format: Format
+  ): TrackRestoreIdentity = TrackRestoreIdentity(
+    type = type,
+    groupIndex = groupIndex,
+    trackIndex = trackIndex,
+    formatId = normalizedText(format.id),
+    label = normalizedText(format.label),
+    language = normalizedLanguage(format.language),
+    sampleMimeType = normalizedText(format.sampleMimeType),
+    codecs = normalizedText(format.codecs),
+    channelCount = format.channelCount,
+    sampleRate = format.sampleRate,
+    selectionFlags = format.selectionFlags
+  )
+
+  private fun restorePendingDvTrackSelection(tracks: Tracks): Boolean {
+    val pending = pendingDvTrackRestore ?: return false
+    if (trackSelector == null) return false
+    if (shouldWaitForDvRestoreTracks(pending, tracks)) return true
+    pendingDvTrackRestore = null
+
+    val audioMatch = pending.audio?.let { findTrackRestoreMatch(tracks, it) }
+    val subtitleMatch = pending.subtitle?.let { findTrackRestoreMatch(tracks, it) }
+    val hasSelectedText = tracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSelected }
+    var selectionWillChange = false
+    var appliedRestore = false
+    var audioOverride: TrackSelectionOverride? = null
+    var textOverride: TrackSelectionOverride? = null
+    var clearTextOverrides = false
+    var textDisabled: Boolean? = null
+
+    if (pending.audio != null) {
+      if (audioMatch != null) {
+        audioOverride = TrackSelectionOverride(audioMatch.trackGroup, audioMatch.trackIndex)
+        selectionWillChange = selectionWillChange || !audioMatch.isSelected()
+        appliedRestore = true
+        emitLog("info", "track-restore", "Restoring audio after DV reload: ${pending.audio.describe()} -> ${audioMatch.format.describeTrackFormat()} score=${audioMatch.score}")
+      } else {
+        emitLog("warn", "track-restore", "Could not restore audio after DV reload: ${pending.audio.describe()}")
+      }
+    }
+
+    if (pending.subtitleDisabled) {
+      clearTextOverrides = true
+      textDisabled = true
+      selectionWillChange = selectionWillChange || hasSelectedText
+      appliedRestore = true
+      emitLog("info", "track-restore", "Restoring subtitles off after DV reload")
+    } else if (pending.subtitle != null) {
+      if (subtitleMatch != null) {
+        textOverride = TrackSelectionOverride(subtitleMatch.trackGroup, subtitleMatch.trackIndex)
+        textDisabled = false
+        selectionWillChange = selectionWillChange || !subtitleMatch.isSelected()
+        appliedRestore = true
+        emitLog("info", "track-restore", "Restoring subtitle after DV reload: ${pending.subtitle.describe()} -> ${subtitleMatch.format.describeTrackFormat()} score=${subtitleMatch.score}")
+      } else {
+        emitLog("warn", "track-restore", "Could not restore subtitle after DV reload: ${pending.subtitle.describe()}")
+      }
+    }
+
+    if (appliedRestore) {
+      audioMatch?.let { updateAudioCodecForTunneling(it.format) }
+      evaluateVideoCodecForTunneling()
+      applyTrackSelectorPolicy(
+        reason = "DV track restore",
+        forceSelector = true,
+        audioOverride = audioOverride,
+        audioDisabled = if (audioOverride != null) false else null,
+        clearTextOverrides = clearTextOverrides,
+        textOverride = textOverride,
+        textDisabled = textDisabled
+      )
+    }
+    return selectionWillChange
+  }
+
+  private fun shouldWaitForDvRestoreTracks(pending: PendingTrackRestore, tracks: Tracks): Boolean {
+    val hasAudioGroups = tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }
+    val hasTextGroups = tracks.groups.any { it.type == C.TRACK_TYPE_TEXT }
+    return (pending.audio != null && !hasAudioGroups) ||
+      (pending.subtitle != null && !hasTextGroups)
+  }
+
+  private fun findTrackRestoreMatch(tracks: Tracks, identity: TrackRestoreIdentity): TrackRestoreMatch? {
+    var bestMatch: TrackRestoreMatch? = null
+    var typeGroupIndex = 0
+    for (group in tracks.groups) {
+      if (group.type != identity.type) continue
+      val trackGroup = group.mediaTrackGroup
+      for (trackIndex in 0 until trackGroup.length) {
+        val format = trackGroup.getFormat(trackIndex)
+        val score = scoreTrackRestoreMatch(identity, format, typeGroupIndex, trackIndex)
+        if (bestMatch == null || score > bestMatch.score) {
+          bestMatch = TrackRestoreMatch(group, trackGroup, trackIndex, format, score)
+        }
+      }
+      typeGroupIndex++
+    }
+
+    val minimumScore = if (identity.type == C.TRACK_TYPE_AUDIO) 35 else 30
+    return bestMatch?.takeIf { it.score >= minimumScore }
+  }
+
+  private fun scoreTrackRestoreMatch(
+    identity: TrackRestoreIdentity,
+    format: Format,
+    groupIndex: Int,
+    trackIndex: Int
+  ): Int {
+    var score = 0
+    val candidateId = normalizedText(format.id)
+    if (identity.formatId != null && candidateId != null) {
+      score += if (identity.formatId == candidateId) 100 else -15
+    }
+    val candidateLabel = normalizedText(format.label)
+    if (identity.label != null && candidateLabel != null && identity.label == candidateLabel) score += 40
+    val candidateLanguage = normalizedLanguage(format.language)
+    if (identity.language != null && candidateLanguage != null && identity.language == candidateLanguage) score += 30
+    val candidateMime = normalizedText(format.sampleMimeType)
+    if (identity.sampleMimeType != null && candidateMime != null && identity.sampleMimeType == candidateMime) score += 12
+    val candidateCodecs = normalizedText(format.codecs)
+    if (identity.codecs != null && candidateCodecs != null && identity.codecs == candidateCodecs) score += 8
+    if (identity.channelCount != Format.NO_VALUE && identity.channelCount == format.channelCount) score += 6
+    if (identity.sampleRate != Format.NO_VALUE && identity.sampleRate == format.sampleRate) score += 4
+    if (identity.selectionFlags == format.selectionFlags) score += 3
+    if (identity.groupIndex == groupIndex) score += 20
+    if (identity.trackIndex == trackIndex) score += 5
+    return score
+  }
+
+  private fun TrackRestoreMatch.isSelected(): Boolean = group.isSelected && group.isTrackSelected(trackIndex)
+
+  private fun TrackRestoreIdentity.describe(): String {
+    val parts = mutableListOf<String>()
+    language?.let { parts.add("lang=$it") }
+    label?.let { parts.add("label=$it") }
+    sampleMimeType?.let { parts.add("mime=$it") }
+    codecs?.let { parts.add("codecs=$it") }
+    if (channelCount != Format.NO_VALUE) parts.add("channels=$channelCount")
+    if (sampleRate != Format.NO_VALUE) parts.add("rate=$sampleRate")
+    formatId?.let { parts.add("id=$it") }
+    parts.add("group=$groupIndex")
+    return parts.joinToString(",")
+  }
+
+  private fun Format.describeTrackFormat(): String {
+    val parts = mutableListOf<String>()
+    normalizedLanguage(language)?.let { parts.add("lang=$it") }
+    normalizedText(label)?.let { parts.add("label=$it") }
+    normalizedText(sampleMimeType)?.let { parts.add("mime=$it") }
+    normalizedText(codecs)?.let { parts.add("codecs=$it") }
+    if (channelCount != Format.NO_VALUE) parts.add("channels=$channelCount")
+    if (sampleRate != Format.NO_VALUE) parts.add("rate=$sampleRate")
+    normalizedText(id)?.let { parts.add("id=$it") }
+    return parts.joinToString(",")
+  }
+
+  private fun normalizedText(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
+
+  private fun normalizedLanguage(value: String?): String? = normalizedText(value)?.lowercase()?.takeUnless { it == "und" }
+
+  // Tunneling control — disabled when audio playback cannot use the platform tunneled pipeline.
+
+  private data class TrueHdDirectOutputDecision(
+    val blockDirectOutput: Boolean,
+    val platformProbe: String,
+    val media3Probe: String,
+    val routeSummary: String
+  )
+
+  private fun shouldBlockDirectTrueHd(format: Format, reason: String): Boolean {
+    val decision = evaluateTrueHdDirectOutput(format)
+    logTrueHdDirectOutputDecision(reason, format, decision)
+    return decision.blockDirectOutput
+  }
+
+  private fun updateAudioDecoderPolicy(reason: String, format: Format? = null) {
+    if (format != null && format.sampleMimeType != MimeTypes.AUDIO_TRUEHD) return
+    val decision = evaluateTrueHdDirectOutput(format)
+    logTrueHdDirectOutputDecision(reason, format, decision)
+  }
 
   private fun shouldForceAppAudioDecoder(mimeType: String): Boolean {
     if (mimeType == MimeTypes.AUDIO_FLAC) return true
@@ -1094,6 +1369,184 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
       return true
     }
     return false
+  }
+
+  private fun evaluateTrueHdDirectOutput(format: Format?): TrueHdDirectOutputDecision {
+    val probeFormat = trueHdProbeFormat(format)
+    val audioAttributes = buildMovieAudioAttributes()
+    val platformAttributes = audioAttributes.getPlatformAudioAttributes()
+
+    var platformSupported: Boolean? = null
+    val platformProbe = try {
+      when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+          val platformFormat = buildTrueHdAudioFormat(probeFormat)
+          val support = AudioManager.getDirectPlaybackSupport(platformFormat, platformAttributes)
+          val bitstream = (support and AudioManager.DIRECT_PLAYBACK_BITSTREAM_SUPPORTED) != 0
+          platformSupported = bitstream
+          "api=${Build.VERSION.SDK_INT}, direct=${describeDirectPlaybackSupport(support)}, bitstream=$bitstream"
+        }
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+          val platformFormat = buildTrueHdAudioFormat(probeFormat)
+          val direct = isDirectPlaybackSupportedApi29(platformFormat, platformAttributes)
+          platformSupported = direct
+          "api=${Build.VERSION.SDK_INT}, direct=$direct"
+        }
+        else -> "api=${Build.VERSION.SDK_INT}, direct=unknown"
+      }
+    } catch (e: Exception) {
+      "api=${Build.VERSION.SDK_INT}, direct=error(${e.javaClass.simpleName}: ${e.message})"
+    }
+
+    var media3Supported: Boolean? = null
+    val media3Probe = try {
+      media3Supported = AudioCapabilities
+        .getCapabilities(activity, audioAttributes, null)
+        .isPassthroughPlaybackSupported(probeFormat, audioAttributes)
+      "media3Passthrough=$media3Supported"
+    } catch (e: Exception) {
+      "media3Passthrough=error(${e.javaClass.simpleName}: ${e.message})"
+    }
+
+    val blockDirectOutput = when {
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && platformSupported != null -> !platformSupported
+      media3Supported != null -> !media3Supported
+      platformSupported != null -> !platformSupported
+      else -> false
+    }
+
+    return TrueHdDirectOutputDecision(
+      blockDirectOutput = blockDirectOutput,
+      platformProbe = platformProbe,
+      media3Probe = media3Probe,
+      routeSummary = summarizeAudioOutputRoutes(audioAttributes)
+    )
+  }
+
+  private fun logTrueHdDirectOutputDecision(reason: String, format: Format?, decision: TrueHdDirectOutputDecision) {
+    val key = listOf(
+      decision.blockDirectOutput,
+      decision.platformProbe,
+      decision.media3Probe,
+      decision.routeSummary,
+      format?.id,
+      format?.channelCount,
+      format?.sampleRate
+    ).joinToString("|")
+    if (key == lastTrueHdDirectOutputLogKey) return
+    lastTrueHdDirectOutputLogKey = key
+
+    emitLog(
+      "info",
+      "audio",
+      "TrueHD direct output ${if (decision.blockDirectOutput) "disabled (decoded PCM fallback)" else "allowed"} " +
+        "(reason=$reason, format=${formatAudioSummary(trueHdProbeFormat(format))}, " +
+        "${decision.platformProbe}, ${decision.media3Probe}, route=${decision.routeSummary})"
+    )
+  }
+
+  private fun trueHdProbeFormat(format: Format?): Format = if (format?.sampleMimeType == MimeTypes.AUDIO_TRUEHD) {
+    format
+  } else {
+    Format.Builder()
+      .setSampleMimeType(MimeTypes.AUDIO_TRUEHD)
+      .setChannelCount(8)
+      .setSampleRate(48_000)
+      .build()
+  }
+
+  private fun buildMovieAudioAttributes(): androidx.media3.common.AudioAttributes = androidx.media3.common.AudioAttributes.Builder()
+    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+    .setUsage(C.USAGE_MEDIA)
+    .build()
+
+  private fun buildTrueHdAudioFormat(format: Format): AudioFormat {
+    val channelCount = if (format.channelCount > 0) format.channelCount else 8
+    val channelMask = Util.getAudioTrackChannelConfig(channelCount).takeIf { it != 0 }
+      ?: AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+    val sampleRate = if (format.sampleRate > 0) format.sampleRate else 48_000
+    return AudioFormat.Builder()
+      .setEncoding(AudioFormat.ENCODING_DOLBY_TRUEHD)
+      .setChannelMask(channelMask)
+      .setSampleRate(sampleRate)
+      .build()
+  }
+
+  @Suppress("DEPRECATION")
+  private fun isDirectPlaybackSupportedApi29(
+    audioFormat: AudioFormat,
+    audioAttributes: android.media.AudioAttributes
+  ): Boolean = AudioTrack.isDirectPlaybackSupported(audioFormat, audioAttributes)
+
+  private fun describeDirectPlaybackSupport(support: Int): String {
+    if (support == AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED) return "none"
+    val parts = mutableListOf<String>()
+    if ((support and AudioManager.DIRECT_PLAYBACK_BITSTREAM_SUPPORTED) != 0) parts.add("bitstream")
+    if ((support and AudioManager.DIRECT_PLAYBACK_OFFLOAD_SUPPORTED) != 0) parts.add("offload")
+    if ((support and AudioManager.DIRECT_PLAYBACK_OFFLOAD_GAPLESS_SUPPORTED) != 0) parts.add("offload-gapless")
+    if (parts.isEmpty()) parts.add("0x${support.toString(16)}")
+    return parts.joinToString("+")
+  }
+
+  private fun summarizeAudioOutputRoutes(audioAttributes: androidx.media3.common.AudioAttributes): String = try {
+    val audioManager = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val routedDevices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      audioManager.getAudioDevicesForAttributes(audioAttributes.getPlatformAudioAttributes())
+    } else {
+      emptyList()
+    }
+    val devices = if (routedDevices.isNotEmpty()) {
+      routedDevices
+    } else {
+      audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
+    }
+    val source = if (routedDevices.isNotEmpty()) "routed" else "outputs"
+    if (devices.isEmpty()) {
+      "$source=none"
+    } else {
+      val extra = if (devices.size > 3) ";+${devices.size - 3}" else ""
+      "$source=${devices.take(3).joinToString(";") { describeAudioDevice(it) }}$extra"
+    }
+  } catch (e: Exception) {
+    "error(${e.javaClass.simpleName}: ${e.message})"
+  }
+
+  private fun describeAudioDevice(device: AudioDeviceInfo): String {
+    val encodings = device.encodings.takeIf { it.isNotEmpty() }
+      ?.joinToString("|") { audioEncodingName(it) }
+      ?: "any/unknown"
+    val channels = device.channelCounts.takeIf { it.isNotEmpty() }
+      ?.joinToString("|")
+      ?: "unknown"
+    val name = device.productName?.toString()?.take(32) ?: "unknown"
+    return "${audioDeviceTypeName(device.type)}($name,enc=$encodings,ch=$channels)"
+  }
+
+  private fun audioEncodingName(encoding: Int): String = when (encoding) {
+    AudioFormat.ENCODING_PCM_16BIT -> "pcm16"
+    AudioFormat.ENCODING_PCM_FLOAT -> "pcm-float"
+    AudioFormat.ENCODING_AC3 -> "ac3"
+    AudioFormat.ENCODING_E_AC3 -> "eac3"
+    AudioFormat.ENCODING_E_AC3_JOC -> "eac3-joc"
+    AudioFormat.ENCODING_DTS -> "dts"
+    AudioFormat.ENCODING_DTS_HD -> "dts-hd"
+    AudioFormat.ENCODING_DOLBY_TRUEHD -> "truehd"
+    else -> encoding.toString()
+  }
+
+  private fun audioDeviceTypeName(type: Int): String = when (type) {
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "speaker"
+    AudioDeviceInfo.TYPE_HDMI -> "hdmi"
+    AudioDeviceInfo.TYPE_HDMI_ARC -> "hdmi-arc"
+    AudioDeviceInfo.TYPE_HDMI_EARC -> "hdmi-earc"
+    AudioDeviceInfo.TYPE_LINE_DIGITAL -> "line-digital"
+    AudioDeviceInfo.TYPE_LINE_ANALOG -> "line-analog"
+    AudioDeviceInfo.TYPE_USB_DEVICE -> "usb-device"
+    AudioDeviceInfo.TYPE_USB_HEADSET -> "usb-headset"
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "bt-a2dp"
+    AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bt-sco"
+    AudioDeviceInfo.TYPE_UNKNOWN -> "unknown"
+    else -> "type-$type"
   }
 
   private fun isEac3MimeType(mimeType: String): Boolean = mimeType == MimeTypes.AUDIO_E_AC3 || mimeType == MimeTypes.AUDIO_E_AC3_JOC
@@ -1123,7 +1576,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
         }
         if (found) break
       }
-      if (!found) Log.d(TAG, "No hardware audio decoder for $mimeType — FFmpeg will handle it")
+      if (!found) Log.d(TAG, "No hardware audio decoder for $mimeType — app decoder may handle it")
       found
     } catch (e: Exception) {
       Log.w(TAG, "Failed to query audio decoders for $mimeType: ${e.message}")
@@ -1187,17 +1640,68 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     }
   }
 
-  private fun updateTunnelingState(reason: String) {
+  private fun updateTunnelingState(reason: String, forceSelector: Boolean = false) {
+    applyTrackSelectorPolicy(reason = reason, forceSelector = forceSelector)
+  }
+
+  private fun applyTrackSelectorPolicy(
+    reason: String,
+    forceSelector: Boolean = false,
+    clearAudioOverrides: Boolean = false,
+    clearTextOverrides: Boolean = false,
+    audioOverride: TrackSelectionOverride? = null,
+    textOverride: TrackSelectionOverride? = null,
+    audioDisabled: Boolean? = null,
+    textDisabled: Boolean? = null
+  ) {
     val selector = trackSelector ?: return
-    val player = exoPlayer ?: return
+    val builder = selector.buildUponParameters()
+    var selectorChanged = forceSelector
+
+    if (clearAudioOverrides) {
+      builder.clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+      selectorChanged = true
+    }
+    if (clearTextOverrides) {
+      builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
+      selectorChanged = true
+    }
+    if (audioOverride != null) {
+      builder.setOverrideForType(audioOverride)
+      selectorChanged = true
+    }
+    if (textOverride != null) {
+      builder.setOverrideForType(textOverride)
+      selectorChanged = true
+    }
+    if (audioDisabled != null) {
+      builder.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, audioDisabled)
+      selectorChanged = true
+    }
+    if (textDisabled != null) {
+      builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textDisabled)
+      selectorChanged = true
+    }
+
+    val shouldTunnel = calculateTunnelingEnabled() ?: return
+    selectorChanged = updateCurrentTunnelingState(reason, shouldTunnel) || selectorChanged
+    builder.setTunnelingEnabled(shouldTunnel)
+    if (selectorChanged) selector.parameters = builder.build()
+  }
+
+  private fun calculateTunnelingEnabled(): Boolean? {
+    val player = exoPlayer ?: return null
     val audioDelayActive = (renderersFactory?.audioDelayUs?.get() ?: 0L) != 0L
-    val shouldTunnel = tunnelingUserEnabled && (player.playbackParameters.speed == 1f) && !tunnelingDisabledForCodec && !audioDelayActive
-    if (shouldTunnel == currentTunneledPlayback) return
+    return tunnelingUserEnabled && (player.playbackParameters.speed == 1f) && !tunnelingDisabledForCodec && !audioDelayActive
+  }
+
+  private fun updateCurrentTunnelingState(reason: String, shouldTunnel: Boolean): Boolean {
+    if (shouldTunnel == currentTunneledPlayback) return false
     currentTunneledPlayback = shouldTunnel
-    emitLog("info", "tunneling", "Toggling tunneling=$shouldTunnel (reason=$reason, user=$tunnelingUserEnabled, speed=${player.playbackParameters.speed}, audioCodecDisabled=$tunnelingDisabledForAudioCodec, videoCodecDisabled=$tunnelingDisabledForVideoCodec, audioDelay=$audioDelayActive)")
-    selector.setParameters(
-      selector.buildUponParameters().setTunnelingEnabled(shouldTunnel)
-    )
+    val speed = exoPlayer?.playbackParameters?.speed ?: 1f
+    val audioDelayActive = (renderersFactory?.audioDelayUs?.get() ?: 0L) != 0L
+    emitLog("info", "tunneling", "Toggling tunneling=$shouldTunnel (reason=$reason, user=$tunnelingUserEnabled, speed=$speed, audioCodecDisabled=$tunnelingDisabledForAudioCodec, videoCodecDisabled=$tunnelingDisabledForVideoCodec, decodedTrueHdPcmDisabled=$tunnelingDisabledForDecodedTrueHdPcm, audioDelay=$audioDelayActive)")
+    return true
   }
 
   private fun evaluateAudioCodecForTunneling() {
@@ -1207,7 +1711,14 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     } ?: return
 
     val format = selectedAudioGroup.mediaTrackGroup.getFormat(0)
+    updateAudioCodecForTunneling(format)
+  }
+
+  private fun updateAudioCodecForTunneling(format: Format) {
     val mimeType = format.sampleMimeType ?: return
+    if (mimeType != MimeTypes.AUDIO_TRUEHD) {
+      tunnelingDisabledForDecodedTrueHdPcm = false
+    }
 
     val newDisabled = !hasHardwareAudioDecoder(mimeType)
     if (newDisabled != tunnelingDisabledForAudioCodec) {
@@ -1225,6 +1736,35 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     }
 
     return mediaItemBuilder.build()
+  }
+
+  private fun selectedAudioFormat(): Format? {
+    val player = exoPlayer ?: return null
+    val selectedAudioGroup = player.currentTracks.groups.firstOrNull {
+      it.type == C.TRACK_TYPE_AUDIO && it.isSelected
+    } ?: return null
+    return selectedAudioGroup.mediaTrackGroup.getFormat(0)
+  }
+
+  private fun isPcmEncoding(encoding: Int): Boolean = when (encoding) {
+    AudioFormat.ENCODING_PCM_8BIT,
+    AudioFormat.ENCODING_PCM_16BIT,
+    AudioFormat.ENCODING_PCM_FLOAT,
+    AudioFormat.ENCODING_PCM_24BIT_PACKED,
+    AudioFormat.ENCODING_PCM_32BIT -> true
+    else -> false
+  }
+
+  private fun formatAudioSummary(format: Format): String {
+    val parts = mutableListOf<String>()
+    parts.add("mime=${format.sampleMimeType ?: "unknown"}")
+    parts.add("codec=${format.codecs ?: "unknown"}")
+    parts.add("channels=${format.channelCount}")
+    parts.add("sampleRate=${format.sampleRate}")
+    format.id?.let { parts.add("id=$it") }
+    format.label?.let { parts.add("label=$it") }
+    format.language?.let { parts.add("lang=$it") }
+    return parts.joinToString(", ")
   }
 
   // Decoder hang detection via AnalyticsListener:
@@ -1250,6 +1790,89 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
       initializationDurationMs: Long
     ) {
       audioDecoderInitName = decoderName
+      emitLog("info", "audio", "Decoder initialized: $decoderName (${initializationDurationMs}ms)")
+    }
+
+    override fun onAudioInputFormatChanged(
+      eventTime: AnalyticsListener.EventTime,
+      format: Format,
+      decoderReuseEvaluation: DecoderReuseEvaluation?
+    ) {
+      emitLog("info", "audio", "Input format: ${formatAudioSummary(format)}")
+      if (format.sampleMimeType == MimeTypes.AUDIO_TRUEHD) {
+        updateAudioDecoderPolicy("input format", format)
+      }
+    }
+
+    override fun onAudioPositionAdvancing(
+      eventTime: AnalyticsListener.EventTime,
+      playoutStartSystemTimeMs: Long
+    ) {
+      emitLog("debug", "audio", "Position advancing: playoutStart=$playoutStartSystemTimeMs")
+    }
+
+    override fun onAudioUnderrun(
+      eventTime: AnalyticsListener.EventTime,
+      bufferSize: Int,
+      bufferSizeMs: Long,
+      elapsedSinceLastFeedMs: Long
+    ) {
+      emitLog(
+        "warn",
+        "audio",
+        "Underrun: buffer=${bufferSize}B, bufferMs=$bufferSizeMs, elapsedSinceLastFeedMs=$elapsedSinceLastFeedMs"
+      )
+    }
+
+    override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
+      emitLog("warn", "audio", "Sink error: ${audioSinkError.javaClass.name}: ${audioSinkError.message}")
+    }
+
+    override fun onAudioCodecError(eventTime: AnalyticsListener.EventTime, audioCodecError: Exception) {
+      emitLog("warn", "audio", "Codec error: ${audioCodecError.javaClass.name}: ${audioCodecError.message}")
+    }
+
+    override fun onAudioTrackInitialized(
+      eventTime: AnalyticsListener.EventTime,
+      audioTrackConfig: AudioSink.AudioTrackConfig
+    ) {
+      emitLog(
+        "info",
+        "audio",
+        "AudioTrack initialized: encoding=${audioTrackConfig.encoding}, sampleRate=${audioTrackConfig.sampleRate}, " +
+          "channelConfig=0x${audioTrackConfig.channelConfig.toString(16)}, buffer=${audioTrackConfig.bufferSize}B, " +
+          "tunneling=${audioTrackConfig.tunneling}, offload=${audioTrackConfig.offload}"
+      )
+      val audioFormat = selectedAudioFormat()
+      if (audioFormat?.sampleMimeType == MimeTypes.AUDIO_TRUEHD) {
+        if (audioTrackConfig.tunneling && isPcmEncoding(audioTrackConfig.encoding)) {
+          if (!loggedDecodedTrueHdTunnelingGuard) {
+            loggedDecodedTrueHdTunnelingGuard = true
+            emitLog("warn", "audio", "Decoded TrueHD PCM initialized with tunneling=true; forcing tunneling off")
+          }
+          tunnelingDisabledForDecodedTrueHdPcm = true
+          updateTunnelingState("decoded TrueHD PCM tunneling guard", forceSelector = true)
+        } else if (!isPcmEncoding(audioTrackConfig.encoding) && tunnelingDisabledForDecodedTrueHdPcm) {
+          tunnelingDisabledForDecodedTrueHdPcm = false
+          updateTunnelingState("encoded TrueHD output initialized", forceSelector = true)
+        }
+      }
+    }
+
+    override fun onAudioTrackReleased(
+      eventTime: AnalyticsListener.EventTime,
+      audioTrackConfig: AudioSink.AudioTrackConfig
+    ) {
+      emitLog(
+        "debug",
+        "audio",
+        "AudioTrack released: encoding=${audioTrackConfig.encoding}, sampleRate=${audioTrackConfig.sampleRate}, " +
+          "channelConfig=0x${audioTrackConfig.channelConfig.toString(16)}, buffer=${audioTrackConfig.bufferSize}B"
+      )
+    }
+
+    override fun onVolumeChanged(eventTime: AnalyticsListener.EventTime, volume: Float) {
+      emitLog("debug", "audio", "Volume changed: $volume")
     }
 
     override fun onRenderedFirstFrame(
@@ -1400,6 +2023,8 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
 
     decoderInitName = null
     audioDecoderInitName = null
+    loggedDecodedTrueHdTunnelingGuard = false
+    updateAudioDecoderPolicy("open")
     currentMediaUri = uri
     currentHeaders = headers
     currentMediaIsLive = isLive
@@ -1416,6 +2041,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     subtitleTrackGroupMap.clear()
     selectedAudioTrackId = null
     selectedSubtitleTrackId = null
+    pendingDvTrackRestore = null
 
     // Build external subtitle configurations (attached to MediaItem before prepare)
     externalSubtitleList?.forEachIndexed { index, sub ->
@@ -1431,14 +2057,15 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     }
     tunnelingDisabledForAudioCodec = false
     tunnelingDisabledForVideoCodec = false
-    currentTunneledPlayback = tunnelingUserEnabled
+    tunnelingDisabledForDecodedTrueHdPcm = false
+    currentTunneledPlayback = false
     pendingStartPositionMs = startPositionMs
     pendingPlayWhenReady = autoPlay
-    trackSelector?.setParameters(
-      trackSelector!!.buildUponParameters()
-        .setTunnelingEnabled(tunnelingUserEnabled)
-        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+    applyTrackSelectorPolicy(
+      reason = "open",
+      forceSelector = true,
+      clearAudioOverrides = true,
+      clearTextOverrides = true
     )
     emitSeekable(false, force = true)
 
@@ -1498,41 +2125,52 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     dv7RetryAttempted = override != null
     activeDoviMkvWrapper = null
     activeDoviMp4Wrapper = null
-
     val debugMode = override?.name ?: "AUTO"
     emitLog("info", "dv-debug", "Debug DV conversion mode set to $debugMode (active=$dvMode)")
     reloadCurrentMediaForDvMode()
     return true
   }
 
-  private fun reloadCurrentMediaForDvMode() {
-    val player = exoPlayer ?: return
-    val uri = currentMediaUri ?: return
-    if (currentMediaIsLive) return
+  private fun reloadCurrentMediaForDvMode(): Boolean {
+    val player = exoPlayer ?: return false
+    val uri = currentMediaUri ?: return false
+    if (currentMediaIsLive) return false
 
     val savedPosition = maxOf(player.currentPosition, lastPosition, pendingStartPositionMs)
     val savedPlayWhenReady = player.playWhenReady
+    pendingDvTrackRestore = captureDvTrackRestore()?.also { restore ->
+      emitLog(
+        "info",
+        "track-restore",
+        "Saved selection before DV reload: audio=${restore.audio?.describe() ?: "none"}, " +
+          "subtitle=${restore.subtitle?.describe() ?: if (restore.subtitleDisabled) "off" else "none"}"
+      )
+    }
     pendingStartPositionMs = savedPosition
     pendingPlayWhenReady = savedPlayWhenReady
     decoderInitName = null
     audioDecoderInitName = null
+    detectedFrameRate = -1f
+    fpsTimestampCount = 0
     firstFrameRendered = false
+    activeDoviMkvWrapper = null
+    activeDoviMp4Wrapper = null
     stopFrameWatchdog()
     cancelDecoderHangCheck()
 
-    trackSelector?.let { selector ->
-      selector.parameters = selector.buildUponParameters()
-        .setTunnelingEnabled(tunnelingUserEnabled)
-        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-        .build()
-    }
+    applyTrackSelectorPolicy(
+      reason = "DV reload",
+      forceSelector = true,
+      clearAudioOverrides = true,
+      clearTextOverrides = true
+    )
 
     val mediaItem = buildMediaItem(uri)
     player.setMediaItem(mediaItem, savedPosition)
     player.prepare()
     player.playWhenReady = savedPlayWhenReady
     emitLog("info", "dv-debug", "Reloaded media for DV mode $dvMode at ${savedPosition}ms")
+    return true
   }
 
   fun play() {
@@ -1579,36 +2217,38 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
   }
 
   fun selectAudioTrack(trackId: String) {
-    val selector = trackSelector ?: return
     val trackGroup = audioTrackGroupMap[trackId] ?: return
+    val format = trackGroup.getFormat(0)
+    updateAudioCodecForTunneling(format)
 
-    selector.parameters = selector.buildUponParameters()
-      .setOverrideForType(TrackSelectionOverride(trackGroup, 0))
-      .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-      .build()
+    applyTrackSelectorPolicy(
+      reason = "audio track selected",
+      audioOverride = TrackSelectionOverride(trackGroup, 0),
+      audioDisabled = false
+    )
 
     selectedAudioTrackId = trackId
     delegate?.onPropertyChange("aid", trackId)
   }
 
   fun selectSubtitleTrack(trackId: String?) {
-    val selector = trackSelector ?: return
-
     if (trackId == null || trackId == "no") {
       selectedSubtitleTrackId = "no"
-      selector.parameters = selector.buildUponParameters()
-        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-        .build()
+      applyTrackSelectorPolicy(
+        reason = "subtitle disabled",
+        textDisabled = true
+      )
       delegate?.onPropertyChange("sid", "no")
       return
     }
 
     val trackGroup = subtitleTrackGroupMap[trackId] ?: return
     selectedSubtitleTrackId = trackId
-    selector.parameters = selector.buildUponParameters()
-      .setOverrideForType(TrackSelectionOverride(trackGroup, 0))
-      .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-      .build()
+    applyTrackSelectorPolicy(
+      reason = "subtitle track selected",
+      textOverride = TrackSelectionOverride(trackGroup, 0),
+      textDisabled = false
+    )
     delegate?.onPropertyChange("sid", trackId)
   }
 
@@ -1652,12 +2292,11 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
         // this, a previously-selected sub's override would either block the new
         // DEFAULT-flagged sub from winning or, if the new sub fails to load, keep
         // the text renderer stuck with no selection.
-        trackSelector?.let { selector ->
-          selector.parameters = selector.buildUponParameters()
-            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-            .build()
-        }
+        applyTrackSelectorPolicy(
+          reason = "external subtitle reload",
+          clearTextOverrides = true,
+          textDisabled = false
+        )
         selectedSubtitleTrackId = null
 
         val mediaItem = buildMediaItem(mediaUri)
@@ -1909,6 +2548,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
           "dvConversionActive" to (dovi?.conversionActive == true),
           "dvConversionMode" to dvMode.name,
           "dvConversionDebugMode" to (debugDvModeOverride?.name ?: "AUTO"),
+          "dvStrippedInitNals" to (dovi?.strippedInitNalCount ?: 0L),
           "dvStrippedNals" to (dovi?.strippedNalCount ?: 0L),
           "dvConvertedRpus" to (dovi?.convertedRpuCount ?: 0L),
           "dvRpuConversionFailures" to (dovi?.rpuConversionFailureCount ?: 0L),
@@ -1950,6 +2590,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     if (currentTunneledPlayback) return "Active"
     if (!tunnelingUserEnabled) return "Disabled by user"
     if (player.playbackParameters.speed != 1f) return "Off (speed ≠ 1×)"
+    if (tunnelingDisabledForDecodedTrueHdPcm) return "Off (decoded TrueHD PCM)"
     if (tunnelingDisabledForVideoCodec) return "Off (video codec unsupported)"
     if (tunnelingDisabledForAudioCodec) return "Off (no HW audio decoder)"
     return "Off"
@@ -1987,6 +2628,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     audioDecoderInitName = null
     tunnelingDisabledForAudioCodec = false
     tunnelingDisabledForVideoCodec = false
+    tunnelingDisabledForDecodedTrueHdPcm = false
     currentTunneledPlayback = false
     pendingStartPositionMs = 0L
     pendingPlayWhenReady = null
@@ -1995,6 +2637,7 @@ class ExoPlayerCore(private val activity: Activity) : Player.Listener {
     emitSeekable(false, force = true)
     selectedAudioTrackId = null
     selectedSubtitleTrackId = null
+    pendingDvTrackRestore = null
     audioTrackGroupMap.clear()
     subtitleTrackGroupMap.clear()
     exoPlayer?.clearVideoSurface()

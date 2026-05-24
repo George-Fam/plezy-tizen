@@ -60,6 +60,7 @@ import '../services/shader_service.dart';
 import '../providers/shader_provider.dart';
 import '../providers/user_profile_provider.dart';
 import '../utils/app_logger.dart';
+import '../utils/codec_utils.dart';
 import '../utils/dialogs.dart';
 import '../utils/log_redaction_manager.dart';
 import '../utils/live_tv_player_navigation.dart';
@@ -93,6 +94,7 @@ part 'video_player/parts/shader.dart';
 part 'video_player/parts/playback_prompts.dart';
 part 'video_player/parts/playback_services.dart';
 part 'video_player/parts/playback_start.dart';
+part 'video_player/parts/seeking.dart';
 part 'video_player/parts/build.dart';
 part 'video_player/parts/watch_together.dart';
 
@@ -111,6 +113,28 @@ Future<void> _setWakelock(bool enabled) async {
     _wakelockEnabled = null;
     appLogger.w('Wakelock ${enabled ? 'enable' : 'disable'} failed: $e');
   }
+}
+
+class _PlaybackOpenTiming {
+  final Duration? mediaStart;
+  final Duration timelineOffset;
+  final Duration? timelineDuration;
+
+  const _PlaybackOpenTiming({this.mediaStart, required this.timelineOffset, this.timelineDuration});
+}
+
+_PlaybackOpenTiming _playbackOpenTiming({
+  required MediaBackend backend,
+  required bool isTranscoding,
+  required Duration? resumePosition,
+  required int? durationMs,
+}) {
+  final usesSourceOffsetTranscode = isTranscoding && backend == MediaBackend.plex;
+  return _PlaybackOpenTiming(
+    mediaStart: usesSourceOffsetTranscode ? null : resumePosition,
+    timelineOffset: usesSourceOffsetTranscode ? resumePosition ?? Duration.zero : Duration.zero,
+    timelineDuration: isTranscoding && durationMs != null ? Duration(milliseconds: durationMs) : null,
+  );
 }
 
 /// Builds a [TrackPreferencePersister] that fans the language-preference +
@@ -153,6 +177,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final SubtitleTrack? preferredSubtitleTrack;
   final SubtitleTrack? preferredSecondarySubtitleTrack;
   final int selectedMediaIndex;
+  final String? selectedMediaSourceId;
   final bool isOffline;
 
   /// Quality preset override for this playback. When `null`, the screen uses
@@ -195,6 +220,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.preferredSubtitleTrack,
     this.preferredSecondarySubtitleTrack,
     this.selectedMediaIndex = 0,
+    this.selectedMediaSourceId,
     this.isOffline = false,
     this.selectedQualityPreset,
     this.selectedAudioStreamId,
@@ -261,7 +287,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
   // during otherwise-idle setup time.
   Future<void>? _audioFocusFuture;
   late final String _playbackSessionIdentifier;
-  late final String _playbackTranscodeSessionId;
+  late String _playbackTranscodeSessionId;
   String? _playbackPlaySessionId;
   String? _playbackPlayMethod;
   StreamSubscription<PlayerError>? _errorSubscription;
@@ -272,6 +298,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<void>? _playbackRestartSubscription;
   StreamSubscription<void>? _backendSwitchedSubscription;
+  bool _isRestartingTranscodeSeek = false;
   TrackManager? _trackManager;
   StreamSubscription<PlayerLog>? _logSubscription;
   StreamSubscription<void>? _sleepTimerSubscription;
@@ -568,13 +595,6 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
       player = currentPlayer;
       _playerBackendLabel = currentPlayer.playerType;
 
-      // Kick off audio-focus negotiation in parallel with MPV config + prefetch.
-      // On Android this is a round-trip to AudioManager (~90ms cold).
-      if (Platform.isAndroid && !widget.isLive) {
-        _audioFocusFuture = currentPlayer.requestAudioFocus();
-        _audioFocusFuture!.ignore();
-      }
-
       // Kick off getPlaybackData() in parallel with the rest of MPV setup.
       // The network/DB work has no dependency on the player — it just needs
       // the context (providers), which is still safe to touch here because
@@ -591,15 +611,14 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
           throw StateError('No client registered for ${_currentMetadata.serverId}');
         }
         _streamHeaders = genericClient.streamHeaders;
-        // Single source of truth — `capabilities.videoTranscoding` reflects
-        // the per-Plex-server probe (false on Plex installs without a working
-        // transcoder) and is hard-false on Jellyfin. The long-press context
-        // menu's quality picker reads the same flag. Alternate-version
-        // selection still works regardless because it's gated on
-        // `availableVersions.length`, not transcoding capability.
+        // Single source of truth for showing quality controls. Plex uses a
+        // per-server probe; Jellyfin supports explicit quality selection but
+        // should not inherit the global Plex-style default on ordinary play.
         _serverSupportsTranscoding = genericClient.capabilities.videoTranscoding;
         if (widget.selectedQualityPreset == null) {
-          _selectedQualityPreset = settingsService.read(SettingsService.defaultQualityPreset);
+          _selectedQualityPreset = genericClient.backend == MediaBackend.plex && _serverSupportsTranscoding
+              ? settingsService.read(SettingsService.defaultQualityPreset)
+              : TranscodeQualityPreset.original;
         } else {
           _selectedQualityPreset = widget.selectedQualityPreset!;
         }
@@ -610,6 +629,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
         _playbackDataFuture = playbackService.getPlaybackData(
           metadata: _currentMetadata,
           selectedMediaIndex: widget.selectedMediaIndex,
+          selectedMediaSourceId: widget.selectedMediaSourceId,
           preferOffline: _selectedQualityPreset.isOriginal,
           qualityPreset: _selectedQualityPreset,
           selectedAudioStreamId: _selectedAudioStreamId,
@@ -629,6 +649,8 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
       if (Platform.isAndroid && useExoPlayer) {
         final tunneledPlayback = settingsService.read(SettingsService.tunneledPlayback);
         await currentPlayer.setProperty('tunneled-playback', tunneledPlayback ? 'yes' : 'no');
+        final dvConversionMode = settingsService.read(SettingsService.dvConversionMode);
+        await currentPlayer.setProperty('dv-conversion-mode', dvConversionMode.nativeValue);
       }
       if (bufferSizeMB > 0) {
         final bufferSizeBytes = bufferSizeMB * 1024 * 1024;
@@ -669,6 +691,12 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
             await currentPlayer.setProperty('demuxer-max-back-bytes', maxBackBytes.toString());
           }
         }
+      }
+      // requestAudioFocus initializes Android players, so start it only after
+      // init-time ExoPlayer options above have been cached.
+      if (Platform.isAndroid && !widget.isLive) {
+        _audioFocusFuture = currentPlayer.requestAudioFocus();
+        _audioFocusFuture!.ignore();
       }
       await currentPlayer.setProperty('msg-level', debugLoggingEnabled ? 'all=debug' : 'all=error');
       await currentPlayer.setLogLevel(debugLoggingEnabled ? 'v' : 'warn');

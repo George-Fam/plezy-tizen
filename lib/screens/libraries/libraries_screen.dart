@@ -1022,7 +1022,8 @@ class _LibrariesScreenState extends State<LibrariesScreen>
         ? allLibraries.where((lib) => lib.globalKey == _selectedLibraryGlobalKey).firstOrNull
         : null;
 
-    final showMobileTabsRow = selectedLibrary != null && !PlatformDetector.shouldUseSideNavigation(context);
+    final useSideNavigation = PlatformDetector.shouldUseSideNavigation(context);
+    final showMobileTabsRow = selectedLibrary != null && !useSideNavigation;
     final currentTabIndex = _visibleTabs.isEmpty ? 0 : tabController.index.clamp(0, _visibleTabs.length - 1).toInt();
     final currentTabType = _visibleTabs.isEmpty ? null : _visibleTabs[currentTabIndex];
     final useTvRecommendedBackdrop = PlatformDetector.isTV() && currentTabType == LibraryTabType.recommended;
@@ -1133,36 +1134,48 @@ class _LibrariesScreenState extends State<LibrariesScreen>
               ),
       );
     } else if (selectedLibrary != null) {
-      Widget buildTabs() {
+      Widget buildTab(int index) {
+        final tabContent = _buildTabContent(
+          _visibleTabs[index],
+          library: selectedLibrary,
+          isActive: tabController.index == index,
+          tabIndex: index,
+        );
+        if (useTvRecommendedBackdrop) return tabContent;
+
+        return ClipRect(child: tabContent);
+      }
+
+      Widget buildTabs({bool activeOnly = false}) {
+        if (activeOnly) return buildTab(currentTabIndex);
+
+        final children = [for (int i = 0; i < _visibleTabs.length; i++) buildTab(i)];
+
         return TabBarView(
           key: ValueKey(_selectedLibraryGlobalKey),
           controller: tabController,
-          // Disable swipe on desktop - trackpad scrolling triggers accidental tab switches
+          // Disable swipe on desktop/TV - trackpad and d-pad scroll actions can trigger accidental tab switches.
           // See: https://github.com/flutter/flutter/issues/11132
-          physics: PlatformDetector.isDesktop(context) ? const NeverScrollableScrollPhysics() : null,
+          physics: useSideNavigation ? const NeverScrollableScrollPhysics() : null,
           // Wrap each tab in ClipRect so horizontal overflow (e.g. hub rows
           // with Clip.none) doesn't bleed into adjacent tabs during swipe transitions.
-          children: [
-            for (int i = 0; i < _visibleTabs.length; i++)
-              ClipRect(
-                child: _buildTabContent(
-                  _visibleTabs[i],
-                  library: selectedLibrary,
-                  isActive: tabController.index == i,
-                  tabIndex: i,
-                ),
-              ),
-          ],
+          children: children,
         );
       }
 
       if (useTvRecommendedBackdrop) {
-        body = Stack(
-          fit: StackFit.expand,
-          children: [
-            buildTabs(),
-            Positioned(top: 0, left: 0, right: 0, child: ExcludeFocusTraversal(child: buildTransparentTvTopBar())),
-          ],
+        body = Focus(
+          canRequestFocus: false,
+          skipTraversal: true,
+          onKeyEvent: (_, event) => event.logicalKey.isDpadDirection ? KeyEventResult.handled : KeyEventResult.ignored,
+          child: Stack(
+            fit: StackFit.expand,
+            clipBehavior: Clip.none,
+            children: [
+              buildTabs(activeOnly: true),
+              Positioned(top: 0, left: 0, right: 0, child: ExcludeFocusTraversal(child: buildTransparentTvTopBar())),
+            ],
+          ),
         );
       } else {
         body = NestedScrollView(
@@ -1416,9 +1429,6 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
 
   void _reorderLibraries(int oldIndex, int newIndex) {
     setState(() {
-      if (newIndex > oldIndex) {
-        newIndex -= 1;
-      }
       final library = _tempLibraries.removeAt(oldIndex);
       _tempLibraries.insert(newIndex, library);
     });
@@ -1560,7 +1570,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
 
     return ReorderableListView.builder(
       scrollController: _dialogScrollController,
-      onReorder: _reorderLibraries,
+      onReorderItem: _reorderLibraries,
       itemCount: _tempLibraries.length,
       padding: const EdgeInsets.symmetric(vertical: 8),
       buildDefaultDragHandles: false,
@@ -1590,7 +1600,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
 
     return ReorderableListView.builder(
       scrollController: scrollController,
-      onReorder: _reorderLibraries,
+      onReorderItem: _reorderLibraries,
       itemCount: _tempLibraries.length,
       padding: const EdgeInsets.symmetric(vertical: 8),
       buildDefaultDragHandles: false,
@@ -1641,58 +1651,53 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
     return Opacity(
       key: ValueKey(library.globalKey),
       opacity: isHidden ? 0.5 : 1.0,
-      child: Container(
-        decoration: BoxDecoration(color: tileColor),
-        child: ListTile(
-          leading: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ReorderableDragStartListener(
-                index: index,
-                child: AppIcon(
-                  isMoving ? Symbols.swap_vert_rounded : Symbols.drag_indicator_rounded,
-                  fill: 1,
-                  color: isMoving ? colorScheme.primary : IconTheme.of(context).color?.withValues(alpha: 0.5),
-                ),
+      child: ListTile(
+        tileColor: tileColor,
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ReorderableDragStartListener(
+              index: index,
+              child: AppIcon(
+                isMoving ? Symbols.swap_vert_rounded : Symbols.drag_indicator_rounded,
+                fill: 1,
+                color: isMoving ? colorScheme.primary : IconTheme.of(context).color?.withValues(alpha: 0.5),
               ),
-              const SizedBox(width: 8),
-              AppIcon(ContentTypeHelper.getLibraryIcon(library.kind.id), fill: 1),
-            ],
-          ),
-          title: Text(library.title),
-          subtitle: showServerName
-              ? Text(
-                  library.serverName!,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
-                  ),
-                )
-              : null,
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                decoration: FocusTheme.focusBackgroundDecoration(
-                  isFocused: isVisibilityButtonFocused,
-                  borderRadius: 20,
+            ),
+            const SizedBox(width: 8),
+            AppIcon(ContentTypeHelper.getLibraryIcon(library.kind.id), fill: 1),
+          ],
+        ),
+        title: Text(library.title),
+        subtitle: showServerName
+            ? Text(
+                library.serverName!,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
                 ),
-                child: IconButton(
-                  icon: AppIcon(isHidden ? Symbols.visibility_off_rounded : Symbols.visibility_rounded, fill: 1),
-                  tooltip: isHidden ? t.libraries.showLibrary : t.libraries.hideLibrary,
-                  onPressed: () => widget.onToggleVisibility(library),
-                ),
+              )
+            : null,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              decoration: FocusTheme.focusBackgroundDecoration(isFocused: isVisibilityButtonFocused, borderRadius: 20),
+              child: IconButton(
+                icon: AppIcon(isHidden ? Symbols.visibility_off_rounded : Symbols.visibility_rounded, fill: 1),
+                tooltip: isHidden ? t.libraries.showLibrary : t.libraries.hideLibrary,
+                onPressed: () => widget.onToggleVisibility(library),
               ),
-              Container(
-                decoration: FocusTheme.focusBackgroundDecoration(isFocused: isOptionsButtonFocused, borderRadius: 20),
-                child: IconButton(
-                  icon: const AppIcon(Symbols.more_vert_rounded, fill: 1),
-                  tooltip: t.libraries.libraryOptions,
-                  onPressed: () => _showLibraryMenuBottomSheet(context, library),
-                ),
+            ),
+            Container(
+              decoration: FocusTheme.focusBackgroundDecoration(isFocused: isOptionsButtonFocused, borderRadius: 20),
+              child: IconButton(
+                icon: const AppIcon(Symbols.more_vert_rounded, fill: 1),
+                tooltip: t.libraries.libraryOptions,
+                onPressed: () => _showLibraryMenuBottomSheet(context, library),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

@@ -140,7 +140,7 @@ class WhatsOnTabState extends State<WhatsOnTab> with LiveTvActionsMixin<WhatsOnT
   }
 
   void _onItemTap(LiveTvHubEntry entry) {
-    final channel = findChannel(entry.program.channelIdentifier);
+    final channel = findChannelForProgram(entry.program);
 
     if (entry.program.isCurrentlyAiring && channel != null) {
       // Live → play directly
@@ -189,7 +189,7 @@ class WhatsOnTabState extends State<WhatsOnTab> with LiveTvActionsMixin<WhatsOnT
             onTap: _onItemTap,
             onLongPress: (entry) => showProgramDetails(
               program: entry.program,
-              channel: findChannel(entry.program.channelIdentifier),
+              channel: findChannelForProgram(entry.program),
               posterThumb: entry.metadata.grandparentThumbPath ?? entry.metadata.thumbPath,
               posterServerId: entry.metadata.serverId ?? '',
             ),

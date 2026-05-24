@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:material_symbols_icons/symbols.dart';
@@ -21,6 +23,7 @@ import '../../utils/platform_detector.dart';
 import '../../utils/dialogs.dart';
 import '../../utils/download_utils.dart';
 import '../../utils/snackbar_helper.dart';
+import '../../widgets/ios_status_bar_tap_scroll_to_top.dart';
 import '../base_media_list_detail_screen.dart';
 import '../focusable_detail_screen_mixin.dart';
 import '../../mixins/grid_focus_node_mixin.dart';
@@ -40,6 +43,8 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
         StandardItemLoader<PlaylistDetailScreen>,
         GridFocusNodeMixin<PlaylistDetailScreen>,
         FocusableDetailScreenMixin<PlaylistDetailScreen> {
+  static const int _pageSize = playlistItemsPageSize;
+
   @override
   Object get mediaItem => widget.playlist;
 
@@ -141,6 +146,14 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
   int? _movingIndex;
   int? _originalIndex;
   List<MediaItem>? _originalOrder;
+  int? _playlistTotalSize;
+  int _playlistLoadGeneration = 0;
+  bool _isLoadingFullPlaylist = false;
+  String? _playlistContinuationErrorMessage;
+
+  bool get _isPlaylistFullyLoaded => _playlistTotalSize != null && items.length >= _playlistTotalSize!;
+
+  bool get _canEditPlaylist => !_isReadOnly && _isPlaylistFullyLoaded;
 
   // Estimated item height for scroll-into-view (card + vertical margins)
   static const double _estimatedItemHeight = 114.0;
@@ -159,9 +172,106 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
 
   @override
   Future<void> loadItems() async {
-    await super.loadItems();
+    final generation = ++_playlistLoadGeneration;
+    if (mounted) {
+      setState(() {
+        isLoading = true;
+        errorMessage = null;
+        items = [];
+        _playlistTotalSize = null;
+        _isLoadingFullPlaylist = false;
+        _playlistContinuationErrorMessage = null;
+        _focusedIndex = 0;
+        _focusedColumn = 0;
+        _movingIndex = null;
+        _originalIndex = null;
+        _originalOrder = null;
+      });
+    }
 
-    // Auto-focus after load if in keyboard mode
+    try {
+      final firstPage = await mediaClient.fetchPlaylistPage(widget.playlist.id, start: 0, size: _pageSize);
+      if (!mounted || generation != _playlistLoadGeneration) return;
+
+      setState(() {
+        items = List.of(firstPage.items);
+        _playlistTotalSize = firstPage.totalCount;
+        isLoading = false;
+        _isLoadingFullPlaylist = firstPage.items.length < firstPage.totalCount;
+      });
+
+      appLogger.d(
+        'Loaded ${firstPage.items.length} of ${firstPage.totalCount} items for playlist: ${widget.playlist.title}',
+      );
+      _autoFocusAfterLoad();
+
+      if (firstPage.items.length < firstPage.totalCount) {
+        unawaited(_loadRemainingPlaylistPages(generation, firstPage.items.length, firstPage.totalCount));
+      }
+    } catch (e) {
+      appLogger.e('Failed to load playlist items', error: e);
+      if (!mounted || generation != _playlistLoadGeneration) return;
+      setState(() {
+        errorMessage = getLoadErrorMessage(e);
+        isLoading = false;
+        _isLoadingFullPlaylist = false;
+      });
+    }
+  }
+
+  Future<void> _loadRemainingPlaylistPages(int generation, int startOffset, int totalCount) async {
+    var offset = startOffset;
+    var total = totalCount;
+    if (mounted && generation == _playlistLoadGeneration) {
+      setState(() {
+        _isLoadingFullPlaylist = true;
+        _playlistContinuationErrorMessage = null;
+      });
+    }
+    try {
+      while (offset < total) {
+        final page = await mediaClient.fetchPlaylistPage(widget.playlist.id, start: offset, size: _pageSize);
+        if (!mounted || generation != _playlistLoadGeneration) return;
+        if (page.items.isEmpty) break;
+        setState(() {
+          items = List.of(items)..addAll(page.items);
+          total = page.totalCount;
+          _playlistTotalSize = page.totalCount;
+        });
+        offset += page.items.length;
+      }
+      appLogger.d(
+        'Loaded ${items.length} of ${_playlistTotalSize ?? items.length} items for playlist: ${widget.playlist.title}',
+      );
+      if (mounted && generation == _playlistLoadGeneration) {
+        setState(() {
+          _playlistContinuationErrorMessage = null;
+        });
+      }
+    } catch (e, st) {
+      appLogger.w('Failed to finish loading playlist items', error: e, stackTrace: st);
+      if (mounted && generation == _playlistLoadGeneration) {
+        setState(() {
+          _playlistContinuationErrorMessage = t.messages.errorLoading(error: e.toString());
+        });
+      }
+    } finally {
+      if (mounted && generation == _playlistLoadGeneration) {
+        setState(() {
+          _isLoadingFullPlaylist = false;
+          if (_focusedColumn != 0 && !_canEditPlaylist) _focusedColumn = 0;
+        });
+      }
+    }
+  }
+
+  void _retryPlaylistContinuation() {
+    final total = _playlistTotalSize;
+    if (_isLoadingFullPlaylist || total == null || items.length >= total) return;
+    unawaited(_loadRemainingPlaylistPages(_playlistLoadGeneration, items.length, total));
+  }
+
+  void _autoFocusAfterLoad() {
     if (mounted && items.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -205,10 +315,12 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
     final downloadProvider = Provider.of<DownloadProvider>(context, listen: false);
 
     try {
+      final allItems = await fetchAllPlaylistItems(mediaClient, widget.playlist.id);
+      if (!mounted) return;
       final result = await showPlaylistDownloadOptionsAndQueue(
         context,
         playlistMetadata: _playlistAsMetadata(),
-        items: items,
+        items: allItems,
         client: mediaClient,
         downloadProvider: downloadProvider,
       );
@@ -260,10 +372,7 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
   }
 
   Future<void> _onReorder(int oldIndex, int newIndex) async {
-    // Adjust newIndex if moving down in the list
-    if (newIndex > oldIndex) {
-      newIndex--;
-    }
+    if (!_canEditPlaylist) return;
 
     // Can't reorder if indices are the same
     if (oldIndex == newIndex) return;
@@ -343,6 +452,7 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
   }
 
   Future<void> _removeItem(int index) async {
+    if (!_canEditPlaylist) return;
     if (items.isEmpty || index < 0 || index >= items.length) return;
     final item = items[index];
 
@@ -499,7 +609,7 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
       }
       if (key.isLeftKey) {
         // Navigate left within columns
-        if (_focusedColumn == 0 && !_isReadOnly) {
+        if (_focusedColumn == 0 && _canEditPlaylist) {
           // Go to drag handle (column 1)
           setState(() => _focusedColumn = 1);
           return KeyEventResult.handled;
@@ -511,7 +621,7 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
       }
       if (key.isRightKey) {
         // Navigate right within columns
-        if (_focusedColumn == 0 && !_isReadOnly) {
+        if (_focusedColumn == 0 && _canEditPlaylist) {
           // Go to remove button (column 2)
           setState(() => _focusedColumn = 2);
           return KeyEventResult.handled;
@@ -525,14 +635,14 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
         if (_focusedColumn == 0) {
           // Play from this item
           _playFromItem(_focusedIndex);
-        } else if (_focusedColumn == 1 && !_isReadOnly) {
+        } else if (_focusedColumn == 1 && _canEditPlaylist) {
           // Enter move mode
           setState(() {
             _movingIndex = _focusedIndex;
             _originalIndex = _focusedIndex;
             _originalOrder = List.from(items);
           });
-        } else if (_focusedColumn == 2) {
+        } else if (_focusedColumn == 2 && _canEditPlaylist) {
           // Remove item
           _removeItem(_focusedIndex);
         }
@@ -580,13 +690,14 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
   @override
   Widget build(BuildContext context) {
     final isKeyboardMode = InputModeTracker.isKeyboardMode(context);
+    final allowsNativeBackGesture = PlatformDetector.isHandheldIOS(context);
 
     // For regular playlists, wrap the scroll view with the Focus widget
     // (Focus is a RenderObject widget and cannot directly wrap a sliver)
     final needsListFocus = !_isReadOnly && items.isNotEmpty;
 
     Widget scrollView = CustomScrollView(
-      controller: scrollController,
+      primary: true,
       slivers: [
         CustomAppBar(
           title: Column(
@@ -619,7 +730,7 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
           actions: buildFocusableAppBarActions(),
         ),
         ...buildStateSlivers(),
-        if (items.isNotEmpty)
+        if (items.isNotEmpty) ...[
           if (_isReadOnly)
             // Smart playlists / Jellyfin playlists: focusable grid view
             // (read-only, no reordering or removal)
@@ -627,6 +738,9 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
           else
             // Plex regular playlists: sliver reorderable list
             _buildReorderableList(isKeyboardMode),
+          if (_isLoadingFullPlaylist || _playlistContinuationErrorMessage != null)
+            _buildPlaylistContinuationStatusSliver(),
+        ],
       ],
     );
 
@@ -647,7 +761,7 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
     }
 
     return PopScope(
-      canPop: false,
+      canPop: allowsNativeBackGesture && _movingIndex == null,
       onPopInvokedWithResult: (didPop, result) {
         if (BackKeyCoordinator.consumeIfHandled()) return;
         if (didPop) return;
@@ -656,14 +770,20 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
           Navigator.pop(context);
         }
       },
-      child: Scaffold(body: scrollView),
+      child: PrimaryScrollController(
+        controller: scrollController,
+        child: IosStatusBarTapScrollToTop(
+          controller: scrollController,
+          child: Scaffold(body: scrollView),
+        ),
+      ),
     );
   }
 
   /// Build a reorderable list for regular playlists with focus support
   Widget _buildReorderableList(bool _) {
     return SliverReorderableList(
-      onReorder: _onReorder,
+      onReorderItem: _onReorder,
       itemCount: items.length,
       itemBuilder: (context, index) {
         final item = items[index];
@@ -688,13 +808,34 @@ class _PlaylistDetailScreenState extends BaseMediaListDetailScreen<PlaylistDetai
             onRemove: () => _removeItem(index),
             onTap: () => _playFromItem(index),
             onRefresh: updateItem,
-            canReorder: !_isReadOnly,
+            canReorder: _canEditPlaylist,
             isFocused: isFocused,
             focusedColumn: isFocused ? _focusedColumn : null,
             isMoving: isMoving,
           ),
         );
       },
+    );
+  }
+
+  Widget _buildPlaylistContinuationStatusSliver() {
+    final error = _playlistContinuationErrorMessage;
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: error == null
+              ? const CircularProgressIndicator()
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(error, textAlign: TextAlign.center),
+                    const SizedBox(height: 8),
+                    TextButton(onPressed: _retryPlaylistContinuation, child: Text(t.common.retry)),
+                  ],
+                ),
+        ),
+      ),
     );
   }
 }

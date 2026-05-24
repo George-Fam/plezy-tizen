@@ -86,13 +86,8 @@ class JellyfinClient
         _JellyfinLiveTvMethods,
         _JellyfinImageDownloadMethods
     implements MediaServerClient, ScopedMediaServerClient, GracefullyCloseable {
-  JellyfinClient._({
-    required JellyfinConnection connection,
-    required MediaServerHttpClient http,
-    FavoriteChannelsRepository? favoritesRepository,
-  }) : _connection = connection,
-       _http = http,
-       _favoritesRepository = favoritesRepository ?? const SharedPreferencesFavoriteChannelsRepository();
+  JellyfinClient._({required this._connection, required this._http, FavoriteChannelsRepository? favoritesRepository})
+    : _favoritesRepository = favoritesRepository ?? const SharedPreferencesFavoriteChannelsRepository();
 
   /// Build a fully-initialised [JellyfinClient]. The factory probes
   /// `/System/Info/Public` to confirm the server is reachable; callers can
@@ -172,14 +167,6 @@ class JellyfinClient
   /// (currently only on admin-status change). [MultiServerManager] uses this
   /// to re-broadcast status so admin-gated UI rebuilds.
   FutureOr<void> Function(JellyfinConnection connection)? onConnectionUpdated;
-
-  /// Per-collection cache for [fetchCollectionPage]. Jellyfin's API doesn't
-  /// paginate collection children, so the first call materialises the full
-  /// list and subsequent paged calls slice from the same in-memory copy.
-  /// Lifetime is the client's lifetime — collections rarely change in a
-  /// single session, and a stale-but-bounded list is acceptable.
-  @override
-  final Map<String, List<MediaItem>> _collectionItemsCache = {};
 
   /// Read-only view of the headers attached to every outgoing request.
   /// Test-only entry point for asserting the SDK-style `MediaBrowser`

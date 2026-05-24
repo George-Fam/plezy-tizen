@@ -75,6 +75,8 @@ class LiveTvChannel with MultiServerFields {
   @JsonKey(includeFromJson: false, includeToJson: false)
   final String? liveDvrKey;
   @JsonKey(includeFromJson: false, includeToJson: false)
+  final String? liveTvSourceTitle;
+  @JsonKey(includeFromJson: false, includeToJson: false)
   final String? favoriteSource;
   @JsonKey(includeFromJson: false, includeToJson: false)
   final String? favoriteStoreKey;
@@ -94,6 +96,7 @@ class LiveTvChannel with MultiServerFields {
     this.serverId,
     this.serverName,
     this.liveDvrKey,
+    this.liveTvSourceTitle,
     this.favoriteSource,
     this.favoriteStoreKey,
   });
@@ -104,6 +107,7 @@ class LiveTvChannel with MultiServerFields {
     String? serverId,
     String? serverName,
     String? liveDvrKey,
+    String? liveTvSourceTitle,
     String? favoriteSource,
     String? favoriteStoreKey,
   }) {
@@ -122,6 +126,7 @@ class LiveTvChannel with MultiServerFields {
       serverId: serverId ?? this.serverId,
       serverName: serverName ?? this.serverName,
       liveDvrKey: liveDvrKey ?? this.liveDvrKey,
+      liveTvSourceTitle: liveTvSourceTitle ?? this.liveTvSourceTitle,
       favoriteSource: favoriteSource ?? this.favoriteSource,
       favoriteStoreKey: favoriteStoreKey ?? this.favoriteStoreKey,
     );

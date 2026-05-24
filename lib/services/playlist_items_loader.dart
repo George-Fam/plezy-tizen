@@ -1,16 +1,22 @@
 import '../media/media_item.dart';
 import '../media/media_server_client.dart';
 
+const int playlistItemsPageSize = 200;
+
 /// Page through every item in a playlist via the backend-neutral client API.
-Future<List<MediaItem>> fetchAllPlaylistItems(MediaServerClient client, String playlistId, {int pageSize = 100}) async {
+Future<List<MediaItem>> fetchAllPlaylistItems(
+  MediaServerClient client,
+  String playlistId, {
+  int pageSize = playlistItemsPageSize,
+}) async {
   final all = <MediaItem>[];
   var offset = 0;
   while (true) {
-    final page = await client.fetchPlaylistItems(playlistId, offset: offset, limit: pageSize);
-    if (page.isEmpty) break;
-    all.addAll(page);
-    if (page.length < pageSize) break;
-    offset += page.length;
+    final page = await client.fetchPlaylistPage(playlistId, start: offset, size: pageSize);
+    if (page.items.isEmpty) break;
+    all.addAll(page.items);
+    if (all.length >= page.totalCount) break;
+    offset += page.items.length;
   }
   return all;
 }

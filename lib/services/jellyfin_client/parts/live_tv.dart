@@ -102,6 +102,8 @@ mixin _JellyfinLiveTvMethods on MediaServerCacheMixin {
       channelCallSign: json['ChannelCallSign'] as String? ?? json['ChannelName'] as String?,
       live: json['IsLive'] as bool?,
       premiere: json['IsPremiere'] as bool?,
+      serverId: serverId,
+      serverName: serverName,
     );
   }
 

@@ -27,6 +27,7 @@ class TrackChapterControls extends StatelessWidget {
   final List<MediaChapter> chapters;
   final bool chaptersLoaded;
   final TrackControlsState trackControlsState;
+  final Future<void> Function(Duration position)? onSeekRequested;
   final Function(Duration position)? onSeekCompleted;
 
   /// List of FocusNodes for the buttons (passed from parent for navigation)
@@ -53,6 +54,7 @@ class TrackChapterControls extends StatelessWidget {
     required this.chapters,
     required this.chaptersLoaded,
     required this.trackControlsState,
+    this.onSeekRequested,
     this.onSeekCompleted,
     this.focusNodes,
     this.onFocusChange,
@@ -153,7 +155,6 @@ class TrackChapterControls extends StatelessWidget {
     required IconData icon,
     required String semanticLabel,
     required VoidCallback? onPressed,
-    required Tracks? tracks,
     required bool isMobile,
     required bool isDesktop,
     String? tooltip,
@@ -166,8 +167,7 @@ class TrackChapterControls extends StatelessWidget {
       isActive: isActive,
       focusNode: focusNodes != null && focusNodes!.length > buttonIndex ? focusNodes![buttonIndex] : null,
       onKeyEvent: focusNodes != null
-          ? (node, event) =>
-                _handleButtonKeyEvent(node, event, buttonIndex, _getButtonCount(tracks, isMobile, isDesktop))
+          ? (node, event) => _handleButtonKeyEvent(node, event, buttonIndex, _getButtonCount(isMobile, isDesktop))
           : null,
       onFocusChange: onFocusChange,
       onPressed: onPressed,
@@ -203,7 +203,6 @@ class TrackChapterControls extends StatelessWidget {
                 isActive: isActive,
                 tooltip: t.videoControls.settingsButton,
                 semanticLabel: t.videoControls.settingsButton,
-                tracks: tracks,
                 isMobile: isMobile,
                 isDesktop: isDesktop,
                 onPressed: () {
@@ -246,7 +245,9 @@ class TrackChapterControls extends StatelessWidget {
         // Combined audio & subtitles button
         {
           final currentIndex = buttonIndex;
-          final hasSubs = _hasSubtitles(tracks);
+          final hasSourceSubs =
+              trackControlsState.sourceSubtitleTracks.isNotEmpty && trackControlsState.onSwitchSubtitleStreamId != null;
+          final hasSubs = _hasSubtitles(tracks) || hasSourceSubs;
           final selectedSub = player.state.track.subtitle;
           final hasActiveSubtitle = selectedSub != null && selectedSub.id != 'no';
           final isHidden = hasSubs && hasActiveSubtitle && !subtitlesVisible;
@@ -259,7 +260,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: icon,
               tooltip: t.videoControls.tracksButton,
               semanticLabel: t.videoControls.tracksButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: () {
@@ -279,6 +279,9 @@ class TrackChapterControls extends StatelessWidget {
                         sourceAudioTracks: trackControlsState.sourceAudioTracks,
                         selectedAudioStreamId: trackControlsState.selectedAudioStreamId,
                         onSwitchAudioStreamId: trackControlsState.onSwitchAudioStreamId,
+                        sourceSubtitleTracks: trackControlsState.sourceSubtitleTracks,
+                        selectedSubtitleStreamId: trackControlsState.selectedSubtitleStreamId,
+                        onSwitchSubtitleStreamId: trackControlsState.onSwitchSubtitleStreamId,
                         subtitleSearchSupported: trackControlsState.subtitleSearchSupported,
                       ),
                     )
@@ -298,7 +301,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: Symbols.bookmarks_rounded,
               tooltip: t.videoControls.chaptersButton,
               semanticLabel: t.videoControls.chaptersButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: () {
@@ -310,6 +312,7 @@ class TrackChapterControls extends StatelessWidget {
                         chapters: chapters,
                         chaptersLoaded: chaptersLoaded,
                         serverId: serverId,
+                        onSeekRequested: onSeekRequested,
                         onSeekCompleted: onSeekCompleted,
                       ),
                     )
@@ -329,7 +332,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: Symbols.queue_rounded,
               tooltip: t.videoControls.queue,
               semanticLabel: t.videoControls.queue,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: () {
@@ -352,7 +354,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: Symbols.picture_in_picture_alt,
               tooltip: t.videoControls.pipButton,
               semanticLabel: t.videoControls.pipButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: onTogglePIPMode,
@@ -370,7 +371,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: _getBoxFitIcon(boxFitMode),
               tooltip: _getBoxFitTooltip(boxFitMode),
               semanticLabel: t.videoControls.aspectRatioButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: onCycleBoxFitMode,
@@ -388,7 +388,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: isRotationLocked ? Symbols.screen_lock_rotation_rounded : Symbols.screen_rotation_rounded,
               tooltip: isRotationLocked ? t.videoControls.unlockRotation : t.videoControls.lockRotation,
               semanticLabel: t.videoControls.rotationLockButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: onToggleRotationLock,
@@ -406,7 +405,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: Symbols.lock_rounded,
               tooltip: t.videoControls.lockScreen,
               semanticLabel: t.videoControls.screenLockButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: onToggleScreenLock,
@@ -425,7 +423,6 @@ class TrackChapterControls extends StatelessWidget {
               tooltip: t.videoControls.alwaysOnTopButton,
               semanticLabel: t.videoControls.alwaysOnTopButton,
               isActive: isAlwaysOnTop,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: onToggleAlwaysOnTop,
@@ -443,7 +440,6 @@ class TrackChapterControls extends StatelessWidget {
               icon: isFullscreen ? Symbols.fullscreen_exit_rounded : Symbols.fullscreen_rounded,
               tooltip: isFullscreen ? t.videoControls.exitFullscreenButton : t.videoControls.fullscreenButton,
               semanticLabel: isFullscreen ? t.videoControls.exitFullscreenButton : t.videoControls.fullscreenButton,
-              tracks: tracks,
               isMobile: isMobile,
               isDesktop: isDesktop,
               onPressed: onToggleFullscreen,
@@ -459,7 +455,7 @@ class TrackChapterControls extends StatelessWidget {
   }
 
   /// Calculate total button count for navigation
-  int _getButtonCount(Tracks? tracks, bool isMobile, bool isDesktop) {
+  int _getButtonCount(bool isMobile, bool isDesktop) {
     int count = 1; // Settings button always shown
     count++; // Audio & subtitles button always shown
     if (chapters.isNotEmpty && !hideChaptersAndQueue) count++;

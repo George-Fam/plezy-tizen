@@ -25,6 +25,7 @@ import '../providers/hidden_libraries_provider.dart';
 import '../providers/libraries_provider.dart';
 import '../providers/playback_state_provider.dart';
 import '../widgets/hub_section.dart';
+import '../widgets/clickable_cursor.dart';
 import '../widgets/loading_indicator_box.dart';
 import '../widgets/profile_switching_overlay.dart';
 import 'profile/profile_switch_screen.dart';
@@ -40,6 +41,7 @@ import '../providers/user_profile_provider.dart';
 import '../services/storage_service.dart';
 import '../services/settings_service.dart';
 import '../widgets/settings_builder.dart';
+import '../widgets/fitting_title_text.dart';
 import '../widgets/tv_browse_rail.dart';
 import '../widgets/tv_spotlight_background.dart';
 import '../mixins/refreshable.dart';
@@ -92,6 +94,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   /// mixin's single-server [itemServerId] hook.
   @override
   Future<void> updateItem(String itemId) async {
+    if (!mounted) return;
+
     try {
       final serverId = _serverIdForItem(itemId);
       if (serverId == null) return;
@@ -194,6 +198,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   // Track initial load so we can focus hero when content first appears
   bool _initialLoadComplete = false;
+  bool _pendingTvBrowseRailFocus = false;
 
   // Hub navigation keys
   GlobalKey<HubSectionState>? _continueWatchingHubKey;
@@ -314,7 +319,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   void _focusContentFromAppBar() {
     if (PlatformDetector.isTV()) {
-      _tvBrowseRailKey.currentState?.requestFocus();
+      _focusTvBrowseRailWhenReady(immediate: true);
       return;
     }
 
@@ -327,6 +332,41 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     if (keys.isNotEmpty) {
       keys.first.currentState?.requestFocusFromMemory();
     }
+  }
+
+  void _focusTvBrowseRailWhenReady({bool immediate = false}) {
+    if (!PlatformDetector.isTV()) return;
+    if (!_isTabVisible || !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      _pendingTvBrowseRailFocus = false;
+      return;
+    }
+
+    _pendingTvBrowseRailFocus = true;
+    if (immediate && _tvBrowseHubs.isNotEmpty) {
+      final rail = _tvBrowseRailKey.currentState;
+      if (rail != null) {
+        _pendingTvBrowseRailFocus = false;
+        rail.requestFocus();
+        return;
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_isTabVisible || !(ModalRoute.of(context)?.isCurrent ?? false)) {
+        _pendingTvBrowseRailFocus = false;
+        return;
+      }
+      if (_tvBrowseHubs.isEmpty) return;
+      final rail = _tvBrowseRailKey.currentState;
+      if (rail == null) return;
+      _pendingTvBrowseRailFocus = false;
+      rail.requestFocus();
+    });
+  }
+
+  void _applyPendingTvBrowseRailFocus() {
+    if (_pendingTvBrowseRailFocus) _focusTvBrowseRailWhenReady();
   }
 
   /// Handle vertical navigation between hubs
@@ -365,7 +405,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   /// Navigate focus to the sidebar
   void _navigateToSidebar() {
-    MainScreenFocusScope.of(context)?.focusSidebar();
+    MainScreenFocusScope.of(context, listen: false)?.focusSidebar();
   }
 
   @override
@@ -585,6 +625,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   @override
   void onTabHidden() {
     _isTabVisible = false;
+    _pendingTvBrowseRailFocus = false;
     _autoScrollTimer?.cancel();
     _stopIndicatorProgress();
   }
@@ -599,6 +640,10 @@ class _DiscoverScreenState extends State<DiscoverScreen>
 
   @override
   void focusActiveTabIfReady() {
+    if (PlatformDetector.isTV()) {
+      _focusTvBrowseRailWhenReady();
+      return;
+    }
     _focusTopBoundary();
   }
 
@@ -701,6 +746,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
           _continueWatchingHubKey ??= GlobalKey<HubSectionState>();
         }
       });
+      _applyPendingTvBrowseRailFocus();
 
       // Focus hero section now that it's visible, but only if no modal route is on top
       if (!PlatformDetector.isTV() && onDeck.isNotEmpty && (ModalRoute.of(context)?.isCurrent ?? false)) {
@@ -720,14 +766,16 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       // On initial load, focus the hero so the user starts on content (not the toolbar)
       if (!_initialLoadComplete && onDeck.isNotEmpty) {
         _initialLoadComplete = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? false)) return;
-          if (PlatformDetector.isTV()) {
-            _tvBrowseRailKey.currentState?.requestFocus();
-          } else if (_heroFocusNode.canRequestFocus) {
-            _heroFocusNode.requestFocus();
-          }
-        });
+        if (PlatformDetector.isTV()) {
+          _focusTvBrowseRailWhenReady();
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? false)) return;
+            if (_heroFocusNode.canRequestFocus) {
+              _heroFocusNode.requestFocus();
+            }
+          });
+        }
       }
 
       // Wait for global hubs
@@ -757,14 +805,11 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         _areHubsLoading = false;
         _updateHubKeys();
       });
+      _applyPendingTvBrowseRailFocus();
 
       if (PlatformDetector.isTV() && !_initialLoadComplete && filteredHubs.isNotEmpty) {
         _initialLoadComplete = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-            _tvBrowseRailKey.currentState?.requestFocus();
-          }
-        });
+        _focusTvBrowseRailWhenReady();
       }
 
       appLogger.d('Discover content loaded successfully');
@@ -1192,12 +1237,13 @@ class _DiscoverScreenState extends State<DiscoverScreen>
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
             children: [
-              Text(
-                t.discover.title,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
+              if (!PlatformDetector.isTV())
+                Text(
+                  t.discover.title,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
               const Spacer(),
               Consumer2<WatchTogetherProvider, CompanionRemoteProvider>(
                 builder: (context, watchTogether, companionRemote, _) {
@@ -1327,6 +1373,8 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         SettingsService.showServerNameOnHubs,
         SettingsService.showHeroSection,
         SettingsService.hideSpoilers,
+        SettingsService.libraryDensity,
+        SettingsService.episodePosterMode,
       ],
       builder: (context) => _buildContent(context),
     );
@@ -1482,25 +1530,56 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     final size = MediaQuery.sizeOf(context);
     final theme = Theme.of(context);
     final spotlight = _effectiveSpotlightItem;
-    final hideSpoilers = SettingsService.instanceOrNull!.read(SettingsService.hideSpoilers);
+    final svc = SettingsService.instanceOrNull!;
+    final hideSpoilers = svc.read(SettingsService.hideSpoilers);
     final browseHubs = _tvBrowseHubs;
-    final spotlightTop = (size.height * 0.1).clamp(96.0, 150.0).toDouble();
-    final spotlightBottom = (size.height * 0.53).clamp(180.0, 900.0).toDouble();
-    final spotlightLeft = (24 * TvLayoutConstants.scaleForSize(size)).clamp(18.0, 40.0).toDouble();
+    final scale = TvLayoutConstants.scaleForSize(size);
+    final sidebarBleed = MainScreenFocusScope.sideNavigationBleedOf(
+      context,
+      alwaysKeepSidebarOpen: svc.read(SettingsService.alwaysKeepSidebarOpen),
+    );
+    final railSize = MainScreenFocusScope.foregroundSizeOf(context);
+    final fullBleedWidth = MainScreenFocusScope.fullBleedWidthOf(context);
+    final foregroundLeft = MainScreenFocusScope.foregroundLeftOf(context);
+    final railHeight = browseHubs.isEmpty
+        ? 0.0
+        : TvBrowseRailLayout.estimateHeight(
+            size: railSize,
+            hubs: browseHubs,
+            density: svc.read(SettingsService.libraryDensity),
+            episodePosterMode: svc.read(SettingsService.episodePosterMode),
+            tallPosterScale: TvBrowseRailLayout.compactTallPosterScale,
+          );
+    final spotlightTop = (size.height * 0.075).clamp(64.0 * scale, 120.0 * scale).toDouble();
+    final minimumSpotlightBottom = railHeight + (8 * scale);
+    final baseSpotlightBottom = (size.height * 0.48).clamp(160.0, 820.0).toDouble();
+    final desiredSpotlightBottom = minimumSpotlightBottom > baseSpotlightBottom
+        ? minimumSpotlightBottom
+        : baseSpotlightBottom;
+    final maxSpotlightBottom = (size.height - spotlightTop - (96 * scale)).clamp(0.0, double.infinity).toDouble();
+    final spotlightBottom = desiredSpotlightBottom > maxSpotlightBottom ? maxSpotlightBottom : desiredSpotlightBottom;
+    final spotlightLeft = (24 * scale).clamp(18.0, 40.0).toDouble();
 
     return Material(
       color: theme.scaffoldBackgroundColor,
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          TvSpotlightBackground(
-            item: spotlight,
-            client: _getMediaClientForItem(spotlight),
-            hideSpoilers: hideSpoilers,
-            contentTop: spotlightTop,
-            contentBottom: spotlightBottom,
-            contentLeft: spotlightLeft,
-            compact: true,
-            showPrimaryAction: false,
+          Positioned(
+            top: 0,
+            bottom: 0,
+            left: -foregroundLeft,
+            width: fullBleedWidth,
+            child: TvSpotlightBackground(
+              item: spotlight,
+              client: _getMediaClientForItem(spotlight),
+              hideSpoilers: hideSpoilers,
+              contentTop: spotlightTop,
+              contentBottom: spotlightBottom,
+              contentLeft: spotlightLeft + foregroundLeft,
+              compact: true,
+              showPrimaryAction: false,
+            ),
           ),
           if (_isLoading || (_areHubsLoading && browseHubs.isEmpty)) const Center(child: CircularProgressIndicator()),
           if (_errorMessage != null)
@@ -1547,9 +1626,16 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     hub.id == 'continue_watching' ? _loadAllContinueWatchingItems() : Future.value(hub.items),
                 onNavigateUp: _focusTopActions,
                 onNavigateToSidebar: _navigateToSidebar,
+                tallPosterScale: TvBrowseRailLayout.compactTallPosterScale,
+                backgroundBleedLeft: sidebarBleed,
               ),
             ),
-          Positioned(top: 0, left: 0, right: 0, child: ExcludeFocusTraversal(child: _buildOverlaidAppBar())),
+          SideNavigationBleedBuilder(
+            targetBleed: sidebarBleed,
+            child: ExcludeFocusTraversal(child: _buildOverlaidAppBar()),
+            builder: (context, animatedBleed, child) =>
+                Positioned(top: 0, left: -animatedBleed, width: fullBleedWidth, child: child!),
+          ),
           if (_switchingProfile) const ProfileSwitchingOverlay(),
         ],
       ),
@@ -1600,20 +1686,22 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       // Pause/Play button
-                      GestureDetector(
-                        onTap: () {
-                          if (_isAutoScrollPaused) {
-                            _resumeAutoScroll();
-                          } else {
-                            _pauseAutoScroll();
-                          }
-                        },
-                        child: AppIcon(
-                          _isAutoScrollPaused ? Symbols.play_arrow_rounded : Symbols.pause_rounded,
-                          fill: 1,
-                          color: Theme.of(context).colorScheme.onSurface,
-                          size: 18,
-                          semanticLabel: '${_isAutoScrollPaused ? t.common.play : t.common.pause} auto-scroll',
+                      ClickableCursor(
+                        child: GestureDetector(
+                          onTap: () {
+                            if (_isAutoScrollPaused) {
+                              _resumeAutoScroll();
+                            } else {
+                              _pauseAutoScroll();
+                            }
+                          },
+                          child: AppIcon(
+                            _isAutoScrollPaused ? Symbols.play_arrow_rounded : Symbols.pause_rounded,
+                            fill: 1,
+                            color: Theme.of(context).colorScheme.onSurface,
+                            size: 18,
+                            semanticLabel: '${_isAutoScrollPaused ? t.common.play : t.common.pause} auto-scroll',
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -1688,6 +1776,14 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     final alignLeft = isTv || isLargeScreen;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final heroLogoWidth = isTv ? TvLayoutConstants.heroLogoWidth : 400.0;
+    final heroLogoHeight = isTv ? TvLayoutConstants.heroLogoHeight : 120.0;
+    final heroTitleStyle = theme.textTheme.displaySmall?.copyWith(
+      color: colorScheme.onSurface,
+      fontWeight: FontWeight.bold,
+      fontSize: isTv ? 52 : null,
+      shadows: [Shadow(color: colorScheme.surface.withValues(alpha: 0.8), blurRadius: 8)],
+    );
 
     // Determine content type label for chip
     final contentTypeLabel = heroItem.isMovie ? t.discover.movie : t.discover.tvShow;
@@ -1703,237 +1799,255 @@ class _DiscoverScreenState extends State<DiscoverScreen>
       label: heroLabel,
       button: true,
       hint: t.accessibility.tapToPlay,
-      child: GestureDetector(
-        onTap: () {
-          appLogger.d('Navigating to VideoPlayerScreen for: ${heroItem.title}');
-          navigateToVideoPlayer(context, metadata: heroItem);
-        },
-        child: Stack(
-          fit: StackFit.expand,
-          clipBehavior: Clip.none,
-          children: [
-            // Background Image with fade/zoom animation and parallax
-            if (heroItem.artPath != null ||
-                heroItem.backgroundSquarePath != null ||
-                heroItem.grandparentArtPath != null)
-              ClipRect(
-                child: AnimatedBuilder(
-                  animation: _scrollController,
-                  builder: (context, child) {
-                    final scrollOffset = _scrollController.hasClients ? _scrollController.offset : 0.0;
-                    return Transform.translate(offset: Offset(0, scrollOffset * 0.3), child: child);
-                  },
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: const Duration(milliseconds: 800),
-                    curve: Curves.easeOut,
-                    builder: (context, value, child) {
-                      return Transform.scale(
-                        scale: 1.0 + (0.1 * (1 - value)),
-                        child: Opacity(opacity: value, child: child),
-                      );
+      child: ClickableCursor(
+        child: GestureDetector(
+          onTap: () {
+            appLogger.d('Navigating to VideoPlayerScreen for: ${heroItem.title}');
+            navigateToVideoPlayer(context, metadata: heroItem);
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            clipBehavior: Clip.none,
+            children: [
+              // Background Image with fade/zoom animation and parallax
+              if (heroItem.artPath != null ||
+                  heroItem.backgroundSquarePath != null ||
+                  heroItem.grandparentArtPath != null)
+                ClipRect(
+                  child: AnimatedBuilder(
+                    animation: _scrollController,
+                    builder: (context, child) {
+                      final scrollOffset = _scrollController.hasClients ? _scrollController.offset : 0.0;
+                      return Transform.translate(offset: Offset(0, scrollOffset * 0.3), child: child);
                     },
-                    child: Builder(
-                      builder: (context) {
-                        // heroClient resolves to the actual server's client
-                        // (Plex or Jellyfin) so each backend's transcoder
-                        // builds sized URLs.
-                        final size = MediaQuery.sizeOf(context);
-                        final dpr = MediaImageHelper.effectiveDevicePixelRatio(context);
-                        final containerAspect = screenWidth / heroHeight;
-                        final imageUrl = MediaImageHelper.getOptimizedImageUrl(
-                          client: heroClient,
-                          thumbPath:
-                              heroItem.heroArt(containerAspectRatio: containerAspect) ?? heroItem.grandparentArtPath,
-                          maxWidth: size.width,
-                          maxHeight: size.height * 0.7,
-                          devicePixelRatio: dpr,
-                          imageType: ImageType.art,
-                        );
-
-                        final (_, memHeight) = MediaImageHelper.getMemCacheDimensions(
-                          displayWidth: (screenWidth * dpr).round(),
-                          displayHeight: (heroHeight * dpr).round(),
-                          imageType: ImageType.art,
-                        );
-
-                        return blurArtwork(
-                          CachedNetworkImage(
-                            imageUrl: imageUrl,
-                            cacheManager: PlexImageCacheManager.instance,
-                            fit: BoxFit.cover,
-                            memCacheHeight: memHeight,
-                            placeholder: (context, url) =>
-                                ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-                            errorBuilder: (context, error, stackTrace) =>
-                                ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-                          ),
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.0, end: 1.0),
+                      duration: const Duration(milliseconds: 800),
+                      curve: Curves.easeOut,
+                      builder: (context, value, child) {
+                        return Transform.scale(
+                          scale: 1.0 + (0.1 * (1 - value)),
+                          child: Opacity(opacity: value, child: child),
                         );
                       },
+                      child: Builder(
+                        builder: (context) {
+                          // heroClient resolves to the actual server's client
+                          // (Plex or Jellyfin) so each backend's transcoder
+                          // builds sized URLs.
+                          final size = MediaQuery.sizeOf(context);
+                          final dpr = MediaImageHelper.effectiveDevicePixelRatio(context);
+                          final containerAspect = screenWidth / heroHeight;
+                          final imageUrl = MediaImageHelper.getOptimizedImageUrl(
+                            client: heroClient,
+                            thumbPath:
+                                heroItem.heroArt(containerAspectRatio: containerAspect) ?? heroItem.grandparentArtPath,
+                            maxWidth: size.width,
+                            maxHeight: size.height * 0.7,
+                            devicePixelRatio: dpr,
+                            imageType: ImageType.art,
+                          );
+
+                          final (_, memHeight) = MediaImageHelper.getMemCacheDimensions(
+                            displayWidth: (screenWidth * dpr).round(),
+                            displayHeight: (heroHeight * dpr).round(),
+                            imageType: ImageType.art,
+                          );
+
+                          return blurArtwork(
+                            CachedNetworkImage(
+                              imageUrl: imageUrl,
+                              cacheManager: PlexImageCacheManager.instance,
+                              fit: BoxFit.cover,
+                              memCacheHeight: memHeight,
+                              placeholder: (context, url) =>
+                                  ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+                              errorBuilder: (context, error, stackTrace) =>
+                                  ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
-                ),
-              )
-            else
-              ColoredBox(color: colorScheme.surfaceContainerHighest),
+                )
+              else
+                ColoredBox(color: colorScheme.surfaceContainerHighest),
 
-            // Gradient Overlay - blends into scaffold background
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: -4, // Extend past stack bounds to ensure coverage
-              child: IgnorePointer(
-                child: Builder(
-                  builder: (context) {
-                    final bgColor = Theme.of(context).scaffoldBackgroundColor;
-                    return Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Colors.transparent, bgColor.withValues(alpha: 0.9), bgColor],
-                          stops: isTv ? const [0.25, 0.78, 1.0] : const [0.5, 0.85, 1.0],
+              // Gradient Overlay - blends into scaffold background
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: -4, // Extend past stack bounds to ensure coverage
+                child: IgnorePointer(
+                  child: Builder(
+                    builder: (context) {
+                      final bgColor = Theme.of(context).scaffoldBackgroundColor;
+                      return Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.transparent, bgColor.withValues(alpha: 0.9), bgColor],
+                            stops: isTv ? const [0.25, 0.78, 1.0] : const [0.5, 0.85, 1.0],
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
-            ),
 
-            // Content with responsive alignment
-            Positioned(
-              bottom: isTv
-                  ? 88
-                  : isLargeScreen
-                  ? 80
-                  : 50,
-              left: 0,
-              right: isTv
-                  ? screenWidth * 0.36
-                  : isLargeScreen
-                  ? 200
-                  : 0,
-              child: Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isTv
-                      ? TvLayoutConstants.horizontalInset
-                      : isLargeScreen
-                      ? 40
-                      : 24,
-                ),
-                child: Align(
-                  alignment: alignLeft ? Alignment.centerLeft : Alignment.center,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: isTv ? TvLayoutConstants.heroContentMaxWidth : double.infinity,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: alignLeft ? CrossAxisAlignment.start : CrossAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Show logo or name/title
-                        if (heroItem.clearLogoPath != null)
-                          SizedBox(
-                            height: isTv ? TvLayoutConstants.heroLogoHeight : 120,
-                            width: isTv ? TvLayoutConstants.heroLogoWidth : 400,
-                            child: Builder(
-                              builder: (context) {
-                                final dpr = MediaImageHelper.effectiveDevicePixelRatio(context);
-                                final logoUrl = MediaImageHelper.getOptimizedImageUrl(
-                                  client: heroClient,
-                                  thumbPath: heroItem.clearLogoPath,
-                                  maxWidth: isTv ? TvLayoutConstants.heroLogoWidth : 400,
-                                  maxHeight: isTv ? TvLayoutConstants.heroLogoHeight : 120,
-                                  devicePixelRatio: dpr,
-                                  imageType: ImageType.logo,
-                                );
+              // Content with responsive alignment
+              Positioned(
+                bottom: isTv
+                    ? 88
+                    : isLargeScreen
+                    ? 80
+                    : 50,
+                left: 0,
+                right: isTv
+                    ? screenWidth * 0.36
+                    : isLargeScreen
+                    ? 200
+                    : 0,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isTv
+                        ? TvLayoutConstants.horizontalInset
+                        : isLargeScreen
+                        ? 40
+                        : 24,
+                  ),
+                  child: Align(
+                    alignment: alignLeft ? Alignment.centerLeft : Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: isTv ? TvLayoutConstants.heroContentMaxWidth : double.infinity,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: alignLeft ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Show logo or name/title
+                          if (heroItem.clearLogoPath != null)
+                            SizedBox(
+                              height: heroLogoHeight,
+                              width: heroLogoWidth,
+                              child: Builder(
+                                builder: (context) {
+                                  final dpr = MediaImageHelper.effectiveDevicePixelRatio(context);
+                                  final logoUrl = MediaImageHelper.getOptimizedImageUrl(
+                                    client: heroClient,
+                                    thumbPath: heroItem.clearLogoPath,
+                                    maxWidth: heroLogoWidth,
+                                    maxHeight: heroLogoHeight,
+                                    devicePixelRatio: dpr,
+                                    imageType: ImageType.logo,
+                                  );
 
-                                return blurArtwork(
-                                  CachedNetworkImage(
-                                    imageUrl: logoUrl,
-                                    cacheManager: PlexImageCacheManager.instance,
-                                    filterQuality: FilterQuality.medium,
-                                    fit: BoxFit.contain,
-                                    memCacheWidth: ((isTv ? TvLayoutConstants.heroLogoWidth : 400) * dpr)
-                                        .clamp(200, isTv ? 1000 : 800)
-                                        .round(),
-                                    alignment: alignLeft ? Alignment.bottomLeft : Alignment.bottomCenter,
-                                    placeholder: (context, url) => const SizedBox.shrink(),
-                                    errorBuilder: (context, error, stackTrace) {
-                                      // Fallback to text if logo fails to load
-                                      final theme = Theme.of(context);
-                                      final colorScheme = theme.colorScheme;
-                                      return Align(
-                                        alignment: alignLeft ? Alignment.centerLeft : Alignment.center,
-                                        child: Text(
+                                  return blurArtwork(
+                                    CachedNetworkImage(
+                                      imageUrl: logoUrl,
+                                      cacheManager: PlexImageCacheManager.instance,
+                                      filterQuality: FilterQuality.medium,
+                                      fit: BoxFit.contain,
+                                      memCacheWidth: (heroLogoWidth * dpr).clamp(200, isTv ? 1000 : 800).round(),
+                                      alignment: alignLeft ? Alignment.bottomLeft : Alignment.bottomCenter,
+                                      placeholder: (context, url) => const SizedBox.shrink(),
+                                      errorBuilder: (context, error, stackTrace) {
+                                        // Fallback to text if logo fails to load
+                                        return FittingTitleText(
                                           showName,
-                                          style: theme.textTheme.displaySmall?.copyWith(
-                                            color: colorScheme.onSurface,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: isTv ? 52 : null,
-                                            shadows: [
-                                              Shadow(color: colorScheme.surface.withValues(alpha: 0.8), blurRadius: 8),
-                                            ],
-                                          ),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
+                                          style: heroTitleStyle,
                                           textAlign: alignLeft ? TextAlign.left : TextAlign.center,
-                                        ),
-                                      );
-                                    },
+                                          alignment: alignLeft ? Alignment.centerLeft : Alignment.center,
+                                        );
+                                      },
+                                    ),
+                                    sigma: 10,
+                                    clip: false,
+                                  );
+                                },
+                              ),
+                            )
+                          else
+                            SizedBox(
+                              height: heroLogoHeight,
+                              width: heroLogoWidth,
+                              child: FittingTitleText(
+                                showName,
+                                style: heroTitleStyle,
+                                textAlign: alignLeft ? TextAlign.left : TextAlign.center,
+                                alignment: alignLeft ? Alignment.centerLeft : Alignment.center,
+                              ),
+                            ),
+
+                          // Metadata as dot-separated text with content type
+                          if (heroItem.year != null || heroItem.contentRating != null || heroItem.rating != null) ...[
+                            const SizedBox(height: 16),
+                            Text(
+                              [
+                                contentTypeLabel,
+                                if (heroItem.rating != null) '★ ${formatRating(heroItem.rating!)}',
+                                if (heroItem.contentRating != null) formatContentRating(heroItem.contentRating!),
+                                if (heroItem.year != null) heroItem.year.toString(),
+                              ].join(' • '),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: isTv ? 18 : 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              textAlign: alignLeft ? TextAlign.left : TextAlign.center,
+                            ),
+                          ],
+
+                          // On small screens: show button before summary
+                          if (!alignLeft) ...[const SizedBox(height: 20), _buildSmartPlayButton(heroItem)],
+
+                          // Summary with episode info (Apple TV style)
+                          if (heroItem.summary != null && !shouldHideSpoiler) ...[
+                            const SizedBox(height: 12),
+                            RichText(
+                              maxLines: isTv ? 3 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: alignLeft ? TextAlign.left : TextAlign.center,
+                              text: TextSpan(
+                                style: TextStyle(
+                                  color: alignLeft
+                                      ? Colors.white.withValues(alpha: 0.7)
+                                      : colorScheme.onSurface.withValues(alpha: 0.7),
+                                  fontSize: isTv ? 18 : 14,
+                                  height: isTv ? 1.45 : 1.4,
+                                ),
+                                children: [
+                                  if (isEpisode && heroItem.parentIndex != null && heroItem.index != null)
+                                    TextSpan(
+                                      text: 'S${heroItem.parentIndex}, E${heroItem.index}: ',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: alignLeft ? Colors.white : colorScheme.onSurface,
+                                      ),
+                                    ),
+                                  TextSpan(
+                                    text: heroItem.summary?.isNotEmpty == true
+                                        ? heroItem.summary!
+                                        : t.messages.noDescriptionAvailable,
                                   ),
-                                  sigma: 10,
-                                  clip: false,
-                                );
-                              },
+                                ],
+                              ),
                             ),
-                          )
-                        else
-                          Text(
-                            showName,
-                            style: theme.textTheme.displaySmall?.copyWith(
-                              color: colorScheme.onSurface,
-                              fontWeight: FontWeight.bold,
-                              fontSize: isTv ? 52 : null,
-                              shadows: [Shadow(color: colorScheme.surface.withValues(alpha: 0.8), blurRadius: 8)],
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: alignLeft ? TextAlign.left : TextAlign.center,
-                          ),
-
-                        // Metadata as dot-separated text with content type
-                        if (heroItem.year != null || heroItem.contentRating != null || heroItem.rating != null) ...[
-                          const SizedBox(height: 16),
-                          Text(
-                            [
-                              contentTypeLabel,
-                              if (heroItem.rating != null) '★ ${formatRating(heroItem.rating!)}',
-                              if (heroItem.contentRating != null) formatContentRating(heroItem.contentRating!),
-                              if (heroItem.year != null) heroItem.year.toString(),
-                            ].join(' • '),
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: isTv ? 18 : 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            textAlign: alignLeft ? TextAlign.left : TextAlign.center,
-                          ),
-                        ],
-
-                        // On small screens: show button before summary
-                        if (!alignLeft) ...[const SizedBox(height: 20), _buildSmartPlayButton(heroItem)],
-
-                        // Summary with episode info (Apple TV style)
-                        if (heroItem.summary != null && !shouldHideSpoiler) ...[
-                          const SizedBox(height: 12),
-                          RichText(
-                            maxLines: isTv ? 3 : 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: alignLeft ? TextAlign.left : TextAlign.center,
-                            text: TextSpan(
+                          ] else if (shouldHideSpoiler &&
+                              isEpisode &&
+                              heroItem.parentIndex != null &&
+                              heroItem.index != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'S${heroItem.parentIndex}, E${heroItem.index}: ${heroItem.title}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: alignLeft ? TextAlign.left : TextAlign.center,
                               style: TextStyle(
                                 color: alignLeft
                                     ? Colors.white.withValues(alpha: 0.7)
@@ -1941,52 +2055,19 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                                 fontSize: isTv ? 18 : 14,
                                 height: isTv ? 1.45 : 1.4,
                               ),
-                              children: [
-                                if (isEpisode && heroItem.parentIndex != null && heroItem.index != null)
-                                  TextSpan(
-                                    text: 'S${heroItem.parentIndex}, E${heroItem.index}: ',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: alignLeft ? Colors.white : colorScheme.onSurface,
-                                    ),
-                                  ),
-                                TextSpan(
-                                  text: heroItem.summary?.isNotEmpty == true
-                                      ? heroItem.summary!
-                                      : t.messages.noDescriptionAvailable,
-                                ),
-                              ],
                             ),
-                          ),
-                        ] else if (shouldHideSpoiler &&
-                            isEpisode &&
-                            heroItem.parentIndex != null &&
-                            heroItem.index != null) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            'S${heroItem.parentIndex}, E${heroItem.index}: ${heroItem.title}',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: alignLeft ? TextAlign.left : TextAlign.center,
-                            style: TextStyle(
-                              color: alignLeft
-                                  ? Colors.white.withValues(alpha: 0.7)
-                                  : colorScheme.onSurface.withValues(alpha: 0.7),
-                              fontSize: isTv ? 18 : 14,
-                              height: isTv ? 1.45 : 1.4,
-                            ),
-                          ),
-                        ],
+                          ],
 
-                        // On large screens: show button after summary
-                        if (alignLeft) ...[SizedBox(height: isTv ? 28 : 20), _buildSmartPlayButton(heroItem)],
-                      ],
+                          // On large screens: show button after summary
+                          if (alignLeft) ...[SizedBox(height: isTv ? 28 : 20), _buildSmartPlayButton(heroItem)],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

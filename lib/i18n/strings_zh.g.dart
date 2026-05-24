@@ -376,6 +376,12 @@ class _TranslationsSettingsZh extends TranslationsSettingsEn {
 	@override String get displaySwitchDelay => '显示切换延迟';
 	@override String get tunneledPlayback => '通道化播放';
 	@override String get tunneledPlaybackDescription => '使用视频隧道。若 HDR 播放出现黑屏，请禁用。';
+	@override String get dvConversionMode => 'Dolby Vision 转换';
+	@override String get dvConversionModeDescription => '选择 ExoPlayer 如何处理 Dolby Vision Profile 7 文件。';
+	@override String get dvConversionAuto => '自动';
+	@override String get dvConversionNative => '原生 / 禁用';
+	@override String get dvConversionDv81 => 'P7 → P8.1';
+	@override String get dvConversionHevcStrip => 'P7 → HEVC';
 	@override String get requireProfileSelectionOnOpen => '打开应用时询问配置文件';
 	@override String get requireProfileSelectionOnOpenDescription => '每次打开应用时显示配置文件选择';
 	@override String get forceTvMode => '强制 TV 模式';
@@ -569,7 +575,7 @@ class _TranslationsVideoControlsZh extends TranslationsVideoControlsEn {
 	@override String get nextChapterButton => '下一章节';
 	@override String get muteButton => '静音';
 	@override String get unmuteButton => '取消静音';
-	@override String get settingsButton => '视频设置';
+	@override String get settingsButton => '播放设置';
 	@override String get tracksButton => '音频和字幕';
 	@override String get chaptersButton => '章节';
 	@override String get versionsButton => '视频版本';
@@ -1296,7 +1302,6 @@ class _TranslationsVideoSettingsZh extends TranslationsVideoSettingsEn {
 	final TranslationsZh _root; // ignore: unused_field
 
 	// Translations
-	@override String get playbackSettings => '播放设置';
 	@override String get playbackSpeed => '播放速度';
 	@override String get sleepTimer => '睡眠定时器';
 	@override String get audioSync => '音频同步';
@@ -2033,6 +2038,12 @@ extension on TranslationsZh {
 			'settings.displaySwitchDelay' => '显示切换延迟',
 			'settings.tunneledPlayback' => '通道化播放',
 			'settings.tunneledPlaybackDescription' => '使用视频隧道。若 HDR 播放出现黑屏，请禁用。',
+			'settings.dvConversionMode' => 'Dolby Vision 转换',
+			'settings.dvConversionModeDescription' => '选择 ExoPlayer 如何处理 Dolby Vision Profile 7 文件。',
+			'settings.dvConversionAuto' => '自动',
+			'settings.dvConversionNative' => '原生 / 禁用',
+			'settings.dvConversionDv81' => 'P7 → P8.1',
+			'settings.dvConversionHevcStrip' => 'P7 → HEVC',
 			'settings.requireProfileSelectionOnOpen' => '打开应用时询问配置文件',
 			'settings.requireProfileSelectionOnOpenDescription' => '每次打开应用时显示配置文件选择',
 			'settings.forceTvMode' => '强制 TV 模式',
@@ -2175,7 +2186,7 @@ extension on TranslationsZh {
 			'videoControls.nextChapterButton' => '下一章节',
 			'videoControls.muteButton' => '静音',
 			'videoControls.unmuteButton' => '取消静音',
-			'videoControls.settingsButton' => '视频设置',
+			'videoControls.settingsButton' => '播放设置',
 			'videoControls.tracksButton' => '音频和字幕',
 			'videoControls.chaptersButton' => '章节',
 			'videoControls.versionsButton' => '视频版本',
@@ -2301,14 +2312,14 @@ extension on TranslationsZh {
 			'profiles.signOut' => '退出登录',
 			'profiles.signOutPlexTitle' => '退出 Plex 登录？',
 			'profiles.signOutPlexMessage' => ({required Object displayName}) => '要移除 ${displayName} 和所有 Plex Home 用户吗？可随时重新登录。',
+			_ => null,
+		} ?? switch (path) {
 			'profiles.signedOutPlex' => '已退出 Plex 登录。',
 			'profiles.signOutFailed' => '退出登录失败。',
 			'profiles.sectionTitle' => '配置文件',
 			'profiles.summarySingle' => '添加配置文件以混合托管用户和本地身份',
 			'profiles.summaryMultipleWithActive' => ({required Object count, required Object activeName}) => '${count} 个配置文件 · 活跃：${activeName}',
 			'profiles.summaryMultiple' => ({required Object count}) => '${count} 个配置文件',
-			_ => null,
-		} ?? switch (path) {
 			'profiles.removeConnectionTitle' => '移除连接？',
 			'profiles.removeConnectionMessage' => ({required Object displayName, required Object connectionLabel}) => '移除 ${displayName} 对 ${connectionLabel} 的访问。其他个人资料仍保留。',
 			'profiles.deleteProfileTitle' => '删除配置文件？',
@@ -2775,7 +2786,6 @@ extension on TranslationsZh {
 			'companionRemote.remote.subtitles' => '字幕',
 			'companionRemote.remote.audio' => '音频',
 			'companionRemote.remote.searchHint' => '在桌面上搜索...',
-			'videoSettings.playbackSettings' => '播放设置',
 			'videoSettings.playbackSpeed' => '播放速度',
 			'videoSettings.sleepTimer' => '睡眠定时器',
 			'videoSettings.audioSync' => '音频同步',
@@ -2816,13 +2826,13 @@ extension on TranslationsZh {
 			'metadataEdit.poster' => '海报',
 			'metadataEdit.background' => '背景',
 			'metadataEdit.logo' => '标志',
+			_ => null,
+		} ?? switch (path) {
 			'metadataEdit.squareArt' => '方形图片',
 			'metadataEdit.selectPoster' => '选择海报',
 			'metadataEdit.selectBackground' => '选择背景',
 			'metadataEdit.selectLogo' => '选择标志',
 			'metadataEdit.selectSquareArt' => '选择方形图片',
-			_ => null,
-		} ?? switch (path) {
 			'metadataEdit.fromUrl' => '从 URL',
 			'metadataEdit.uploadFile' => '上传文件',
 			'metadataEdit.enterImageUrl' => '输入图片 URL',

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:plezy/media/library_query.dart';
 import 'package:plezy/media/media_backend.dart';
 import 'package:plezy/media/media_item.dart';
 import 'package:plezy/media/media_kind.dart';
@@ -8,6 +9,8 @@ import 'package:plezy/providers/playback_state_provider.dart';
 import 'package:plezy/services/jellyfin_client.dart';
 import 'package:plezy/services/jellyfin_sequential_launcher.dart';
 import 'package:plezy/services/media_list_playback_launcher.dart';
+import 'package:plezy/services/playlist_items_loader.dart';
+import 'package:plezy/utils/media_server_http_client.dart';
 
 /// Recording fake that satisfies [JellyfinClient] via `implements` +
 /// `noSuchMethod`. The launcher only needs the
@@ -42,10 +45,24 @@ class _RecordingJellyfinClient implements JellyfinClient {
 
   @override
   Future<List<MediaItem>> fetchPlaylistItems(String id, {int offset = 0, int limit = 100}) async {
+    final page = await fetchPlaylistPage(id, start: offset, size: limit);
+    return page.items;
+  }
+
+  @override
+  Future<LibraryPage<MediaItem>> fetchPlaylistPage(String id, {int? start, int? size, AbortController? abort}) async {
+    final offset = start ?? 0;
+    final limit = size ?? 100;
     fetchPlaylistItemsCalls.add((id: id, offset: offset, limit: limit));
-    if (offset >= playlistItemsResponse.length) return const [];
+    if (offset >= playlistItemsResponse.length) {
+      return LibraryPage<MediaItem>(items: const [], totalCount: playlistItemsResponse.length, offset: offset);
+    }
     final end = (offset + limit).clamp(0, playlistItemsResponse.length);
-    return playlistItemsResponse.sublist(offset, end);
+    return LibraryPage<MediaItem>(
+      items: playlistItemsResponse.sublist(offset, end),
+      totalCount: playlistItemsResponse.length,
+      offset: offset,
+    );
   }
 
   @override
@@ -189,9 +206,9 @@ void main() {
 
     testWidgets('playlist path pages through every item', (tester) async {
       final ctx = await pumpContext(tester);
-      // 150 items across 2 pages of 100 — the loop must keep paging until
+      // Enough items to span 2 default playlist pages — the loop must keep paging until
       // the server returns a short page.
-      final fetched = List.generate(150, (i) => _ep('p$i'));
+      final fetched = List.generate(playlistItemsPageSize + 50, (i) => _ep('p$i'));
       final fakeClient = _RecordingJellyfinClient(playlistItemsResponse: fetched);
       final playback = PlaybackStateProvider();
 
@@ -217,10 +234,10 @@ void main() {
       );
 
       expect(result, isA<PlayQueueSuccess>());
-      expect(playback.loadedItems.length, 150);
+      expect(playback.loadedItems.length, playlistItemsPageSize + 50);
       expect(fakeClient.fetchPlaylistItemsCalls, hasLength(2));
-      expect(fakeClient.fetchPlaylistItemsCalls[0].offset, 0);
-      expect(fakeClient.fetchPlaylistItemsCalls[1].offset, 100);
+      expect(fakeClient.fetchPlaylistItemsCalls.first.offset, 0);
+      expect(fakeClient.fetchPlaylistItemsCalls[1].offset, playlistItemsPageSize);
     });
 
     testWidgets('collection containing a Series entry only seeds playable descendants', (tester) async {

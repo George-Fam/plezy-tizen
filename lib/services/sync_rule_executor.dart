@@ -46,7 +46,7 @@ class SyncRuleExecutor {
 
   OfflineModeSource? _offlineSource;
 
-  SyncRuleExecutor({required AppDatabase database}) : _database = database;
+  SyncRuleExecutor({required this._database});
 
   bool get isExecuting => _isExecuting;
 
@@ -402,9 +402,7 @@ class SyncRuleExecutor {
     return SyncRuleResult(globalKey: rule.globalKey, title: displayTitle, queuedCount: queued);
   }
 
-  /// Page through every item in a playlist; the neutral
-  /// [MediaServerClient.fetchPlaylistItems] caps each page (Plex at 100,
-  /// Jellyfin honours `limit`).
+  /// Page through every item in a playlist using the shared playlist page size.
   Future<List<MediaItem>> _fetchAllPlaylistItems(MediaServerClient client, String playlistId) async {
     return fetchAllPlaylistItems(client, playlistId);
   }

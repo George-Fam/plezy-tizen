@@ -188,6 +188,17 @@ class ConnectionTestResult {
   ConnectionTestResult({required this.success, required this.latencyMs, this.error, this.transcoderVideo});
 }
 
+bool? _parsePlexTranscoderVideoCapability(Object? value) {
+  return switch (value) {
+    final bool b => b,
+    final int n when n == 1 => true,
+    final int n when n == 0 => false,
+    final String s when s.trim().toLowerCase() == 'true' || s.trim() == '1' => true,
+    final String s when s.trim().toLowerCase() == 'false' || s.trim() == '0' => false,
+    _ => null,
+  };
+}
+
 class PlexClient
     with MediaServerCacheMixin, _PlexLiveTvClientMethods
     implements MediaServerClient, GracefullyCloseable {
@@ -304,14 +315,12 @@ class PlexClient
     required this.serverId,
     this.serverName,
     List<String>? prioritizedEndpoints,
-    Future<void> Function(String newBaseUrl)? onEndpointChanged,
-    VoidCallback? onAllEndpointsExhausted,
+    this._onEndpointChanged,
+    this._onAllEndpointsExhausted,
     http.Client? httpClient,
   }) : _endpointManager = (prioritizedEndpoints != null && prioritizedEndpoints.isNotEmpty)
            ? EndpointFailoverManager(prioritizedEndpoints)
-           : null,
-       _onEndpointChanged = onEndpointChanged,
-       _onAllEndpointsExhausted = onAllEndpointsExhausted {
+           : null {
     LogRedactionManager.registerServer(config.baseUrl, config.token);
 
     _http = MediaServerHttpClient(
@@ -594,7 +603,9 @@ class PlexClient
 
       bool? transcoderVideo;
       if (success && response.data is Map && response.data['MediaContainer'] is Map) {
-        transcoderVideo = flexibleBool((response.data['MediaContainer'] as Map)['transcoderVideo']);
+        transcoderVideo = _parsePlexTranscoderVideoCapability(
+          (response.data['MediaContainer'] as Map)['transcoderVideo'],
+        );
       }
 
       return ConnectionTestResult(
@@ -764,6 +775,47 @@ class PlexClient
     return [];
   }
 
+  int? _responseHeaderInt(MediaServerResponse response, String name) {
+    final lowerName = name.toLowerCase();
+    for (final entry in response.headers.entries) {
+      if (entry.key.toLowerCase() == lowerName) return flexibleInt(entry.value);
+    }
+    return null;
+  }
+
+  int _fallbackPageTotal({required int offset, required int itemCount, int? requestedSize}) {
+    final fullPage = requestedSize != null && requestedSize > 0 && itemCount >= requestedSize;
+    return offset + itemCount + (fullPage ? 1 : 0);
+  }
+
+  int _responseTotalSize(MediaServerResponse response, {required int itemCount, int? start, int? requestedSize}) {
+    final headerTotal = _responseHeaderInt(response, 'X-Plex-Container-Total-Size');
+    if (headerTotal != null) return headerTotal;
+
+    final container = _getMediaContainer(response);
+    final bodyTotal = flexibleInt(container?['totalSize']);
+    if (bodyTotal != null) return bodyTotal;
+
+    final offset = start ?? flexibleInt(container?['offset']) ?? 0;
+    if (start == null && requestedSize == null) {
+      return flexibleInt(container?['size']) ?? itemCount;
+    }
+
+    return _fallbackPageTotal(offset: offset, itemCount: itemCount, requestedSize: requestedSize);
+  }
+
+  ({List<PlexPlaylistDto> items, int totalSize}) _extractPlaylistListResult(
+    MediaServerResponse response, {
+    int? start,
+    int? size,
+  }) {
+    final items = _extractPlaylistList(response);
+    return (
+      items: items,
+      totalSize: _responseTotalSize(response, itemCount: items.length, start: start, requestedSize: size),
+    );
+  }
+
   Future<Map<String, dynamic>> getServerIdentity() async {
     final response = await _getWithFailover('/identity');
     return response.data;
@@ -839,7 +891,12 @@ class PlexClient
     if (filters != null) queryParams.addAll(filters);
     final endpoint = sectionId == 'shared' ? '/library/shared/all' : '/library/sections/$sectionId/all';
     final response = await _getWithFailover(endpoint, queryParameters: queryParams, abort: abort);
-    return _extractLibraryContentResult(response, librarySectionID: _librarySectionIdFromString(sectionId));
+    return _extractLibraryContentResult(
+      response,
+      librarySectionID: _librarySectionIdFromString(sectionId),
+      start: start,
+      requestedSize: size,
+    );
   }
 
   Map<String, dynamic> _buildPaginationParams(int? start, int? size) {
@@ -853,14 +910,15 @@ class PlexClient
     MediaServerResponse response, {
     int? librarySectionID,
     String? librarySectionTitle,
+    int? start,
+    int? requestedSize,
   }) {
     final items = _extractMetadataListWithLibrary(
       response,
       librarySectionID: librarySectionID,
       librarySectionTitle: librarySectionTitle,
     );
-    final container = _getMediaContainer(response);
-    final totalSize = container?['totalSize'] as int? ?? container?['size'] as int? ?? items.length;
+    final totalSize = _responseTotalSize(response, itemCount: items.length, start: start, requestedSize: requestedSize);
     return _LibraryContentResult(items: items, totalSize: totalSize);
   }
 
@@ -877,6 +935,8 @@ class PlexClient
       response,
       librarySectionID: librarySectionID,
       librarySectionTitle: librarySectionTitle,
+      start: start,
+      requestedSize: size,
     );
   }
 
@@ -1082,9 +1142,7 @@ class PlexClient
     }
   }
 
-  /// Page size for iterating all items via [_fetchAllPages]. Also the cap
-  /// for endpoints that send `X-Plex-Container-Size` but aren't truly paginated
-  /// (collections listing, playlists listing, search).
+  /// Default cap for list-style endpoints when a caller doesn't pass a size.
   static const int _defaultListContainerSize = 1000;
 
   /// Page size used when walking all pages of a paginated endpoint.
@@ -1322,27 +1380,15 @@ class PlexClient
         [];
   }
 
-  /// Get every episode beneath a show or season in one call — for a show
-  /// this returns episodes across every season (no per-season walk), for a
-  /// season the episodes directly. Mirrors [_getChildren]'s cache-fallback
-  /// behaviour.
-  ///
-  /// Uses `/grandchildren` rather than `/allLeaves` because the live server
-  /// returns 0 items for `/allLeaves` on a season — `/grandchildren` is the
-  /// only endpoint Plex serves that one-shots both levels (and is also the
-  /// recommended path for mini-series shows that set `skipChildren=true`,
-  /// per the API docs).
-  Future<List<PlexMetadataDto>> _getGrandchildren(String ratingKey) async {
-    final endpoint = '/library/metadata/$ratingKey/grandchildren';
-
-    return await fetchWithCacheFallback<List<PlexMetadataDto>>(
-          cacheKey: endpoint,
-          networkCall: () => _http.get(endpoint),
-          parseCache: (cachedData) => _parseMetadataListFromCachedResponse(cachedData),
-          parseResponse: (response) => _extractMetadataList(response),
-        ) ??
-        [];
-  }
+  /// Page through playable episodes beneath a show or season. Uses
+  /// `/grandchildren` rather than `/allLeaves` because the live server returns
+  /// 0 items for `/allLeaves` on a season.
+  Future<_LibraryContentResult> _getGrandchildrenPage(
+    String ratingKey, {
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) => _fetchPaginatedList('/library/metadata/$ratingKey/grandchildren', start: start, size: size, abort: abort);
 
   /// Get extras for a metadata item (trailers, behind-the-scenes, etc.)
   /// Uses cache when offline or as fallback on network error
@@ -1450,7 +1496,7 @@ class PlexClient
         // deleted-but-still-indexed versions before play.
         networkCall: () => _http.get(
           '/library/metadata/$ratingKey',
-          queryParameters: {'includeMarkers': 1, 'includeChapters': 1, 'checkFiles': 1},
+          queryParameters: {'includeMarkers': 1, 'includeChapters': 1, 'checkFiles': 1, 'includeStreams': 1},
         ),
         parseCache: (cached) => cached as Map<String, dynamic>?,
         parseResponse: (response) => response.data as Map<String, dynamic>?,
@@ -1810,14 +1856,62 @@ class PlexClient
   /// Get full content from a hub using its hub key
   /// Returns the complete list of metadata items in the hub
   Future<List<PlexMetadataDto>> _getHubContent(String hubKey) async {
+    try {
+      final hubSectionID = _librarySectionIdFromString(hubKey);
+      final items = await _fetchAllPages(
+        (start, size, abort) =>
+            _fetchPaginatedList(hubKey, start: start, size: size, abort: abort, librarySectionID: hubSectionID),
+      );
+      return items.where(_isVideoMetadata).toList();
+    } catch (e, st) {
+      appLogger.e('Failed to get hub content', error: e, stackTrace: st);
+      return [];
+    }
+  }
+
+  bool _isVideoMetadata(PlexMetadataDto item) => ContentTypes.videoTypes.contains(item.type?.toLowerCase());
+
+  Future<_LibraryContentResult> _getHubContentPage(
+    String hubKey, {
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final filteredOffset = start ?? 0;
+    final pageSize = size ?? _fetchAllPageSize;
+    final rawPageSize = pageSize > _fetchAllPageSize ? pageSize : _fetchAllPageSize;
     final hubSectionID = _librarySectionIdFromString(hubKey);
-    return _wrapListApiCall<PlexMetadataDto>(() => _http.get(hubKey), (response) {
-      final allItems = _extractMetadataListWithLibrary(response, librarySectionID: hubSectionID);
-      // Filter to only video content (movies, shows, seasons, episodes)
-      return allItems.where((item) {
-        return ContentTypes.videoTypes.contains(item.type?.toLowerCase());
-      }).toList();
-    }, 'Failed to get hub content');
+    final pageItems = <PlexMetadataDto>[];
+    var rawOffset = 0;
+    var filteredSeen = 0;
+    var rawTotal = 0;
+    var rawFinished = false;
+
+    while (pageItems.length < pageSize && !rawFinished) {
+      final result = await _fetchPaginatedList(
+        hubKey,
+        start: rawOffset,
+        size: rawPageSize,
+        abort: abort,
+        librarySectionID: hubSectionID,
+      );
+      rawTotal = result.totalSize;
+      final rawItems = result.items;
+      rawOffset += rawItems.length;
+
+      for (final item in rawItems) {
+        if (!_isVideoMetadata(item)) continue;
+        if (filteredSeen >= filteredOffset && pageItems.length < pageSize) {
+          pageItems.add(item);
+        }
+        filteredSeen++;
+      }
+
+      rawFinished = rawItems.isEmpty || rawOffset >= rawTotal;
+    }
+
+    final totalSize = rawFinished ? filteredSeen : filteredOffset + pageItems.length + 1;
+    return _LibraryContentResult(items: pageItems, totalSize: totalSize);
   }
 
   /// Get playlist content by playlist ID, paginated.
@@ -1829,23 +1923,50 @@ class PlexClient
   Future<List<PlexMetadataDto>> _fetchAllPlaylistItemsDto(String playlistId) =>
       _fetchAllPages((start, size, abort) => _getPlaylist(playlistId, start: start, size: size, abort: abort));
 
-  /// Get all playlists
-  /// Filters by playlistType=video by default
-  /// Set smart to true/false to filter smart playlists, or null for all
-  Future<List<PlexPlaylistDto>> _getPlaylists({String playlistType = 'video', bool? smart}) {
+  /// Get all playlists.
+  /// Filters by playlistType=video by default.
+  /// Set smart to true/false to filter smart playlists, or null for all.
+  Future<List<PlexPlaylistDto>> _getPlaylists({String playlistType = 'video', bool? smart}) async {
+    try {
+      final all = <PlexPlaylistDto>[];
+      var start = 0;
+      while (true) {
+        final page = await _getPlaylistsPage(
+          playlistType: playlistType,
+          smart: smart,
+          start: start,
+          size: _fetchAllPageSize,
+        );
+        if (page.items.isEmpty) break;
+        all.addAll(page.items);
+        start += page.items.length;
+        if (start >= page.totalSize) break;
+      }
+      return all;
+    } catch (e, st) {
+      appLogger.e('Failed to get playlists', error: e, stackTrace: st);
+      return [];
+    }
+  }
+
+  Future<({List<PlexPlaylistDto> items, int totalSize})> _getPlaylistsPage({
+    String playlistType = 'video',
+    bool? smart,
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final pageSize = size ?? _defaultListContainerSize;
     final queryParams = <String, dynamic>{
-      'playlistType': playlistType,
-      'X-Plex-Container-Size': _defaultListContainerSize,
+      if (playlistType.isNotEmpty) 'playlistType': playlistType,
+      ..._buildPaginationParams(start, pageSize),
     };
     if (smart != null) {
       queryParams['smart'] = smart ? '1' : '0';
     }
 
-    return _wrapListApiCall<PlexPlaylistDto>(
-      () => _http.get('/playlists', queryParameters: queryParams),
-      _extractPlaylistList,
-      'Failed to get playlists',
-    );
+    final response = await _getWithFailover('/playlists', queryParameters: queryParams, abort: abort);
+    return _extractPlaylistListResult(response, start: start, size: pageSize);
   }
 
   /// Get playlist metadata by playlist ID
@@ -2143,26 +2264,38 @@ class PlexClient
     );
   }
 
-  /// Get all collections for a library section
-  /// Returns collections as PlexMetadataDto objects with type="collection"
-  Future<List<PlexMetadataDto>> _getLibraryCollections(String sectionId) async {
-    return _wrapListApiCall<PlexMetadataDto>(
-      () => _http.get(
-        '/library/sections/$sectionId/collections',
-        queryParameters: {'includeGuids': 1, 'X-Plex-Container-Size': _defaultListContainerSize},
-      ),
-      (response) {
-        final allItems = _extractMetadataListWithLibrary(
-          response,
-          librarySectionID: _librarySectionIdFromString(sectionId),
-        );
-        // Collections should have type="collection"
-        return allItems.where((item) {
-          return item.type?.toLowerCase() == ContentTypes.collection;
-        }).toList();
-      },
-      'Failed to get library collections',
+  /// Get one page of collections for a library section.
+  Future<_LibraryContentResult> _getLibraryCollectionsPage(
+    String sectionId, {
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final queryParameters = _buildPaginationParams(start, size)..['includeGuids'] = 1;
+    final response = await _getWithFailover(
+      '/library/sections/$sectionId/collections',
+      queryParameters: queryParameters,
+      abort: abort,
     );
+    final result = _extractLibraryContentResult(
+      response,
+      librarySectionID: _librarySectionIdFromString(sectionId),
+      start: start,
+      requestedSize: size,
+    );
+    return result;
+  }
+
+  /// Get all collections for a library section.
+  Future<List<PlexMetadataDto>> _getLibraryCollections(String sectionId) async {
+    try {
+      return _fetchAllPages((start, size, abort) {
+        return _getLibraryCollectionsPage(sectionId, start: start, size: size, abort: abort);
+      });
+    } catch (e, st) {
+      appLogger.e('Failed to get library collections', error: e, stackTrace: st);
+      return [];
+    }
   }
 
   /// Get items in a collection, paginated.
@@ -2695,7 +2828,7 @@ class PlexClient
       final response = await _http.get('/', timeout: const Duration(seconds: 5));
       final container = _getMediaContainer(response);
       final value = container?['transcoderVideo'];
-      final supported = flexibleBool(value);
+      final supported = _parsePlexTranscoderVideoCapability(value) ?? true;
       _serverTranscoderCached = supported;
       return supported;
     } catch (e) {
@@ -2708,9 +2841,9 @@ class PlexClient
   /// Build a VOD transcode stream URL (decision + start path).
   ///
   /// Mirrors [buildLiveStreamPath] but for on-demand video with a quality
-  /// preset, selected audio stream, and HLS protocol. Plex returns a single
-  /// audio track and no subtitle tracks in the transcoded stream — callers
-  /// are expected to sidecar additional subtitles separately.
+  /// preset, selected audio stream, and Plex Desktop-style HTTP/MKV output.
+  /// Text subtitles selected on the Plex part are embedded in the MKV stream;
+  /// real external sidecars are still attached separately by callers.
   ///
   /// [transcodeSessionId] and [sessionIdentifier] should be reused across
   /// seeks + quality/version/audio switches within one playback so the
@@ -2722,96 +2855,20 @@ class PlexClient
     required String sessionIdentifier,
     required String transcodeSessionId,
     int? audioStreamId,
+    MediaSubtitleTrack? selectedSubtitleTrack,
     int? offsetMs,
   }) async {
     try {
-      final isOriginal = preset.isOriginal;
-      final metadataPath = '/library/metadata/$ratingKey';
-
-      // Build the client profile from scratch via X-Plex-Client-Profile-Extra.
-      // We use the `Generic` base platform (see [_transcodePlatformName]) which
-      // has no pre-installed transcode targets, so we must `add-transcode-target`
-      // rather than `append-transcode-target-codec` (which only edits existing
-      // targets — empty on Generic, hence Plex returned decision code 2000
-      // "neither direct play nor conversion is available").
-      //
-      // For non-original presets we also add a bitrate limitation that caps
-      // the video codec; with `replace=true` it overrides any default limit.
-      //
-      // See openapi.md §"Profile Augmentations" for the DSL reference.
-      final profileExtraClauses = <String>[];
-      if (!isOriginal && preset.videoBitrateKbps != null) {
-        profileExtraClauses.add(
-          'add-limitation(scope=videoCodec&scopeName=*&type=upperBound'
-          '&name=video.bitrate&value=${preset.videoBitrateKbps}&replace=true)',
-        );
-      }
-      // Declare both h264 and hevc as allowed transcode targets. In practice
-      // Plex's decision engine strongly prefers h264 for HLS output, so hevc
-      // only gets chosen in edge cases (e.g. HDR content where the server
-      // wants to preserve dynamic range). The codec-list comma is pre-encoded
-      // as `%2C` — see the profile-extra encoding note above.
-      profileExtraClauses.add(
-        'add-transcode-target(type=videoProfile&context=streaming'
-        '&protocol=hls&container=mpegts&videoCodec=h264%2Chevc&audioCodec=aac)',
+      final allParams = _buildTranscodeParams(
+        ratingKey: ratingKey,
+        mediaIndex: mediaIndex,
+        preset: preset,
+        sessionIdentifier: sessionIdentifier,
+        transcodeSessionId: transcodeSessionId,
+        audioStreamId: audioStreamId,
+        selectedSubtitleTrack: selectedSubtitleTrack,
+        offsetMs: offsetMs,
       );
-      final clientProfileExtra = profileExtraClauses.join('+');
-
-      // HLS protocol: seekable via manifest segments. We started with `dash`
-      // (what Plex Web on Chrome uses) but Plex's server only has DASH
-      // transcode profiles for Chrome/Firefox/Safari/Opera — mobile/desktop
-      // platforms fall through with "No conversion profile found for
-      // protocol dash". HLS profiles exist for every Plex-accepted platform.
-      final allParams = <String, String>{
-        'hasMDE': '1',
-        'path': metadataPath,
-        'mediaIndex': mediaIndex.toString(),
-        'partIndex': '0',
-        'protocol': 'hls',
-        'fastSeek': '1',
-        'directPlay': isOriginal ? '1' : '0',
-        'directStream': isOriginal ? '1' : '0',
-        'subtitleSize': '100',
-        'audioBoost': '100',
-        'location': 'lan',
-        if (!isOriginal && preset.videoBitrateKbps != null) 'maxVideoBitrate': preset.videoBitrateKbps.toString(),
-        'addDebugOverlay': '0',
-        'autoAdjustQuality': '0',
-        'directStreamAudio': '0',
-        'mediaBufferSize': '102400',
-        'session': transcodeSessionId,
-        // Subtitles are delivered as client-side sidecars (see
-        // [PlaybackInitializationService._buildTranscodeSidecarSubtitles]).
-        // `subtitles=none` makes the server set the subtitle decision to
-        // `ignore`, so nothing is embedded or burned into the video stream.
-        'subtitles': 'none',
-        // Preserve source timestamps in the transcoded segments. Without it,
-        // Plex resets segment PTS to 0 — so mpv shows 0:00 and sidecar
-        // subtitles desync even though the server is transcoding from the
-        // `offset` position. With copyts=1 the first segment's PTS equals
-        // the source offset and the player's clock lines up with source time.
-        'copyts': '1',
-        if (audioStreamId != null) 'audioStreamID': audioStreamId.toString(),
-        'Accept-Language': 'en',
-        'X-Plex-Session-Identifier': sessionIdentifier,
-        'X-Plex-Client-Profile-Extra': clientProfileExtra,
-        'X-Plex-Incomplete-Segments': '1',
-        'X-Plex-Features': 'external-media,indirect-media',
-        'X-Plex-Model': 'standalone',
-        'X-Plex-Language': 'en',
-        'X-Plex-Product': config.product,
-        'X-Plex-Version': config.version,
-        'X-Plex-Client-Identifier': config.clientIdentifier,
-        // Plex's server rejects unknown platform names with HTTP 400 and maps
-        // known names to codec/bitrate base profiles. Our usual "Flutter"
-        // platform, plus "MacOSX" / "Linux", are all rejected; swap to a
-        // Plex-recognized name just for transcode requests. See
-        // [_transcodePlatformName] for the mapping.
-        'X-Plex-Platform': _transcodePlatformName(),
-        if (config.device != null) 'X-Plex-Device': config.device!,
-        if (offsetMs != null) 'offset': (offsetMs ~/ 1000).toString(),
-        if (config.token != null) 'X-Plex-Token': config.token!,
-      };
 
       final queryString = allParams.entries.map((e) => '${_plexEncode(e.key)}=${_plexEncode(e.value)}').join('&');
 
@@ -2835,16 +2892,12 @@ class PlexClient
           return (startPath: null, outcome: TranscodeDecisionOutcome.failed);
         }
 
-        final outcome = _parseTranscodeDecisionOutcome(decisionResponse.data, isOriginal: isOriginal);
+        final outcome = _parseTranscodeDecisionOutcome(decisionResponse.data, isOriginal: preset.isOriginal);
         if (outcome == TranscodeDecisionOutcome.failed) {
           return (startPath: null, outcome: outcome);
         }
 
-        final startParams = Map<String, String>.from(allParams)..remove('X-Plex-Token');
-        final startQuery = startParams.entries.map((e) => '${_plexEncode(e.key)}=${_plexEncode(e.value)}').join('&');
-
-        // `.m3u8` tells the server to return an HLS manifest.
-        return (startPath: '/video/:/transcode/universal/start.m3u8?$startQuery', outcome: outcome);
+        return (startPath: _buildTranscodeStartPathFromParams(allParams), outcome: outcome);
       } finally {
         decisionClient.close();
       }
@@ -2852,6 +2905,139 @@ class PlexClient
       appLogger.e('Failed to build transcode start path', error: e, stackTrace: st);
       return (startPath: null, outcome: TranscodeDecisionOutcome.failed);
     }
+  }
+
+  String _buildTranscodeStartPathFromParams(Map<String, String> params) {
+    final startParams = Map<String, String>.from(params)..remove('X-Plex-Token');
+    final startQuery = startParams.entries.map((e) => '${_plexEncode(e.key)}=${_plexEncode(e.value)}').join('&');
+    return '/video/:/transcode/universal/start?$startQuery';
+  }
+
+  @visibleForTesting
+  String buildTranscodeStartPathFromParamsForTesting(Map<String, String> params) {
+    return _buildTranscodeStartPathFromParams(params);
+  }
+
+  Map<String, String> _buildTranscodeParams({
+    required String ratingKey,
+    required int mediaIndex,
+    required TranscodeQualityPreset preset,
+    required String sessionIdentifier,
+    required String transcodeSessionId,
+    int? audioStreamId,
+    MediaSubtitleTrack? selectedSubtitleTrack,
+    int? offsetMs,
+  }) {
+    final isOriginal = preset.isOriginal;
+    final selectedEmbeddedTextSubtitle = _shouldEmbedSubtitleInHttpTranscode(selectedSubtitleTrack)
+        ? selectedSubtitleTrack
+        : null;
+
+    // Build the client profile from scratch via X-Plex-Client-Profile-Extra.
+    // We use the `Generic` base platform (see [_transcodePlatformName]) which
+    // has no pre-installed transcode targets, so we must `add-transcode-target`
+    // rather than `append-transcode-target-codec` (which only edits existing
+    // targets — empty on Generic, hence Plex returned decision code 2000
+    // "neither direct play nor conversion is available").
+    //
+    // For non-original presets we also add a bitrate limitation that caps
+    // the video codec; with `replace=true` it overrides any default limit.
+    //
+    // See openapi.md §"Profile Augmentations" for the DSL reference.
+    final profileExtraClauses = <String>['add-settings(DirectPlayStreamSelection=true)'];
+    if (!isOriginal && preset.videoBitrateKbps != null) {
+      profileExtraClauses.add(
+        'add-limitation(scope=videoCodec&scopeName=*&type=upperBound'
+        '&name=video.bitrate&value=${preset.videoBitrateKbps}&replace=true)',
+      );
+    }
+    // Match Plex Desktop's stable HTTP/MKV transcode target. Codec-list commas
+    // are pre-encoded as `%2C` — see the profile-extra encoding note above.
+    profileExtraClauses.add(
+      'add-transcode-target(type=videoProfile&context=streaming'
+      '&protocol=http&container=mkv&videoCodec=h264%2Chevc%2C*'
+      '&audioCodec=opus%2Cvorbis%2Cflac%2C*&subtitleCodec=ass%2Cpgs%2Cvobsub%2C*)',
+    );
+    profileExtraClauses.add(
+      'add-transcode-target-settings(type=videoProfile&context=streaming'
+      '&protocol=http&CopyMatroskaAttachments=true)',
+    );
+    final clientProfileExtra = profileExtraClauses.join('+');
+
+    // HTTP/MKV matches Plex Desktop and lets MPV see embedded subtitle streams.
+    // HLS `subtitles=segmented` was accepted by Plex but produced manifests
+    // with only video/audio renditions for MPV.
+    return <String, String>{
+      'hasMDE': '1',
+      'path': '/library/metadata/$ratingKey',
+      'mediaIndex': mediaIndex.toString(),
+      'partIndex': '0',
+      'protocol': 'http',
+      'fastSeek': '1',
+      'directPlay': isOriginal ? '1' : '0',
+      'directStream': isOriginal ? '1' : '0',
+      'subtitleSize': '100',
+      'audioBoost': '100',
+      'location': 'lan',
+      if (!isOriginal && preset.videoBitrateKbps != null) 'maxVideoBitrate': preset.videoBitrateKbps.toString(),
+      'addDebugOverlay': '0',
+      'autoAdjustQuality': '0',
+      'directStreamAudio': '0',
+      'mediaBufferSize': '102400',
+      'session': transcodeSessionId,
+      // Embed selected text subtitles in the MKV stream. Bitmap subtitles and
+      // unselected tracks stay at `none` so the server cannot burn them into
+      // the video.
+      'subtitles': selectedEmbeddedTextSubtitle != null ? 'embedded' : 'none',
+      if (selectedEmbeddedTextSubtitle != null) 'subtitleStreamID': selectedEmbeddedTextSubtitle.id.toString(),
+      if (selectedEmbeddedTextSubtitle != null) 'advancedSubtitles': 'text',
+      // Preserve source timestamps for the HTTP/MKV stream so player seeks and
+      // sidecar subtitles stay aligned with Plex source time.
+      'copyts': '1',
+      if (audioStreamId != null) 'audioStreamID': audioStreamId.toString(),
+      'Accept-Language': 'en',
+      'X-Plex-Session-Identifier': sessionIdentifier,
+      'X-Plex-Client-Profile-Extra': clientProfileExtra,
+      'X-Plex-Chunked': '1',
+      'X-Plex-Features': 'external-media,indirect-media',
+      'X-Plex-Model': 'standalone',
+      'X-Plex-Language': 'en',
+      'X-Plex-Product': config.product,
+      'X-Plex-Version': config.version,
+      'X-Plex-Client-Identifier': config.clientIdentifier,
+      // Plex's server rejects unknown platform names with HTTP 400 and maps
+      // known names to codec/bitrate base profiles. Our usual "Flutter"
+      // platform, plus "MacOSX" / "Linux", are all rejected; swap to a
+      // Plex-recognized name just for transcode requests. See
+      // [_transcodePlatformName] for the mapping.
+      'X-Plex-Platform': _transcodePlatformName(),
+      if (config.device != null) 'X-Plex-Device': config.device!,
+      if (offsetMs != null) 'offset': (offsetMs ~/ 1000).toString(),
+      if (config.token != null) 'X-Plex-Token': config.token!,
+    };
+  }
+
+  @visibleForTesting
+  Map<String, String> buildTranscodeParamsForTesting({
+    required String ratingKey,
+    required int mediaIndex,
+    required TranscodeQualityPreset preset,
+    required String sessionIdentifier,
+    required String transcodeSessionId,
+    int? audioStreamId,
+    MediaSubtitleTrack? selectedSubtitleTrack,
+    int? offsetMs,
+  }) {
+    return _buildTranscodeParams(
+      ratingKey: ratingKey,
+      mediaIndex: mediaIndex,
+      preset: preset,
+      sessionIdentifier: sessionIdentifier,
+      transcodeSessionId: transcodeSessionId,
+      audioStreamId: audioStreamId,
+      selectedSubtitleTrack: selectedSubtitleTrack,
+      offsetMs: offsetMs,
+    );
   }
 
   /// Platform name Plex Media Server accepts on the transcode decision
@@ -2996,8 +3182,25 @@ class PlexClient
 
   @override
   Future<List<MediaItem>> fetchPlayableDescendants(String parentId) async {
-    final leaves = await _getGrandchildren(parentId);
+    final leaves = await _fetchAllPages(
+      (start, size, abort) => _getGrandchildrenPage(parentId, start: start, size: size, abort: abort),
+    );
     return leaves.map((m) => PlexMappers.mediaItem(m)).toList();
+  }
+
+  @override
+  Future<LibraryPage<MediaItem>> fetchPlayableDescendantsPage(
+    String parentId, {
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final result = await _getGrandchildrenPage(parentId, start: start, size: size, abort: abort);
+    return LibraryPage<MediaItem>(
+      items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(),
+      totalCount: result.totalSize,
+      offset: start ?? 0,
+    );
   }
 
   /// Plex maintains episode queues server-side via `/playQueues`, so the
@@ -3009,8 +3212,9 @@ class PlexClient
   /// Plex playback resolution. Reuses [getVideoPlaybackData] for metadata,
   /// then either runs the transcode-decision flow or returns the direct-play
   /// URL. External subtitle tracks are absolutized with the server's auth
-  /// token; when transcoding, every source subtitle is sidecar-attached so
-  /// the player can hot-swap.
+  /// token; when transcoding, keyed sidecars stay external and selected
+  /// embedded text subtitles are embedded in the HTTP/MKV stream so subtitles
+  /// are never burned in.
   @override
   Future<PlaybackInitializationResult> getPlaybackInitialization(PlaybackInitializationOptions options) async {
     try {
@@ -3023,11 +3227,8 @@ class PlexClient
       final wantTranscode = !options.qualityPreset.isOriginal;
       if (wantTranscode && options.sessionIdentifier != null && options.transcodeSessionId != null) {
         final resolvedAudioId = _resolveAudioStreamId(options.selectedAudioStreamId, data.mediaInfo);
-        // Note: no `offsetMs` — seeking is handled by the player via the HLS
-        // manifest, matching Plex Web's behavior. Baking `offset=` into the URL
-        // makes the server pre-position the transcoder, but the resulting
-        // segments and mpv's native HLS positioning fight each other, leaving
-        // the player clock at 0 and desyncing sidecar subtitles.
+        final resumeOffsetMs = options.metadata.viewOffsetMs;
+        final selectedSubtitleTrack = _selectedSubtitleTrack(data.mediaInfo);
         final result = await buildTranscodeStartPath(
           ratingKey: options.metadata.id,
           mediaIndex: options.selectedMediaIndex,
@@ -3035,6 +3236,8 @@ class PlexClient
           sessionIdentifier: options.sessionIdentifier!,
           transcodeSessionId: options.transcodeSessionId!,
           audioStreamId: resolvedAudioId,
+          selectedSubtitleTrack: selectedSubtitleTrack,
+          offsetMs: resumeOffsetMs != null && resumeOffsetMs > 0 ? resumeOffsetMs : null,
         );
 
         if (result.outcome == TranscodeDecisionOutcome.transcodeOk && result.startPath != null) {
@@ -3097,6 +3300,14 @@ class PlexClient
     return tracks.first.id;
   }
 
+  MediaSubtitleTrack? _selectedSubtitleTrack(MediaSourceInfo? info) {
+    if (info == null) return null;
+    for (final track in info.subtitleTracks) {
+      if (track.selected) return track;
+    }
+    return null;
+  }
+
   /// Build the absolute URL for an external subtitle track on this Plex
   /// server. Returns `null` for tracks that aren't external (no `/library/
   /// streams/{id}` key) or when the server has no auth token.
@@ -3104,28 +3315,50 @@ class PlexClient
   /// Used by the in-player OpenSubtitles polling flow which needs the URL
   /// after the new track shows up in the metadata response.
   String? buildExternalSubtitleUrl(MediaSubtitleTrack track) {
-    if (!track.isExternal) return null;
+    if (!track.isExternal || track.key == null || track.key!.isEmpty) return null;
     final token = config.token;
     if (token == null) return null;
     final ext = CodecUtils.getSubtitleExtension(track.codec);
     return '${config.baseUrl}${track.key}.$ext?encoding=utf-8&X-Plex-Token=$token';
   }
 
-  /// Sidecar URL for any subtitle track (internal or external), used in
-  /// transcode mode where embedded subtitle streams are stripped. Falls
-  /// back to `/library/streams/{id}.{ext}` when [track.key] is missing.
-  /// Returns `null` when no auth token is available.
+  /// Raw sidecar URL for real sidecar subtitle streams. Plex returns 501 for
+  /// `/library/streams/{id}.{ext}` when the stream is embedded, so a Plex
+  /// `Stream.key` is required here.
   String? _buildSidecarSubtitleUrl(MediaSubtitleTrack track) {
+    if (track.key == null || track.key!.isEmpty) return null;
     final token = config.token;
     if (token == null) return null;
     final ext = CodecUtils.getSubtitleExtension(track.codec);
-    final path = (track.key != null && track.key!.isNotEmpty) ? track.key! : '/library/streams/${track.id}';
-    return '${config.baseUrl}$path.$ext?encoding=utf-8&X-Plex-Token=$token';
+    return '${config.baseUrl}${track.key}.$ext?encoding=utf-8&X-Plex-Token=$token';
   }
 
-  /// Build sidecar SubtitleTracks for ALL source subtitle streams (internal +
-  /// external) so the player can hot-swap between them when the main stream
-  /// is transcoded and has no embedded subs.
+  bool _canTranscodeSubtitleAsText(MediaSubtitleTrack track) {
+    return CodecUtils.isTextSubtitleCodec(track.codec);
+  }
+
+  bool _shouldEmbedSubtitleInHttpTranscode(MediaSubtitleTrack? track) {
+    if (track == null) return false;
+    if (track.key != null && track.key!.isNotEmpty) return false;
+    return _canTranscodeSubtitleAsText(track);
+  }
+
+  SubtitleTrack _subtitleTrackFromMediaTrack(MediaSubtitleTrack track, String url) {
+    return SubtitleTrack(
+      id: 'external:$url',
+      title: track.displayTitle ?? track.title ?? track.language ?? 'Track ${track.id}',
+      language: track.languageCode,
+      codec: track.codec,
+      isDefault: track.selected,
+      isForced: track.forced,
+      isExternal: true,
+      uri: url,
+    );
+  }
+
+  /// Build subtitle sidecars for Plex transcode playback. Only real keyed
+  /// sidecars are loaded externally; selected embedded text subtitles are
+  /// carried by the main HTTP/MKV stream.
   List<SubtitleTrack> _buildTranscodeSidecarSubtitles(MediaSourceInfo? mediaInfo) {
     if (mediaInfo == null) return const [];
     if (config.token == null) {
@@ -3138,18 +3371,17 @@ class PlexClient
       try {
         final url = _buildSidecarSubtitleUrl(sub);
         if (url == null) continue;
-        tracks.add(
-          SubtitleTrack.uri(
-            url,
-            title: sub.displayTitle ?? sub.language ?? 'Track ${sub.id}',
-            language: sub.languageCode,
-          ),
-        );
+        tracks.add(_subtitleTrackFromMediaTrack(sub, url));
       } catch (e) {
         appLogger.w('Failed to build sidecar subtitle for stream ${sub.id}', error: e);
       }
     }
     return tracks;
+  }
+
+  @visibleForTesting
+  List<SubtitleTrack> buildTranscodeSidecarSubtitlesForTesting(MediaSourceInfo? mediaInfo) {
+    return _buildTranscodeSidecarSubtitles(mediaInfo);
   }
 
   /// Build list of external subtitle tracks from media info
@@ -3177,7 +3409,7 @@ class PlexClient
         externalSubtitles.add(
           SubtitleTrack.uri(
             url,
-            title: plexTrack.displayTitle ?? plexTrack.language ?? 'Track ${plexTrack.id}',
+            title: plexTrack.displayTitle ?? plexTrack.title ?? plexTrack.language ?? 'Track ${plexTrack.id}',
             language: plexTrack.languageCode,
           ),
         );
@@ -3367,6 +3599,28 @@ class PlexClient
   }
 
   @override
+  Future<LibraryPage<MediaPlaylist>> fetchPlaylistsPage({
+    String playlistType = 'video',
+    bool? smart,
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final result = await _getPlaylistsPage(
+      playlistType: playlistType,
+      smart: smart,
+      start: start,
+      size: size,
+      abort: abort,
+    );
+    return LibraryPage<MediaPlaylist>(
+      items: result.items.map((p) => PlexMappers.mediaPlaylist(p)).toList(),
+      totalCount: result.totalSize,
+      offset: start ?? 0,
+    );
+  }
+
+  @override
   Future<MediaPlaylist?> fetchPlaylistMetadata(String id) async {
     final p = await _getPlaylistMetadata(id);
     return p == null ? null : PlexMappers.mediaPlaylist(p);
@@ -3374,27 +3628,44 @@ class PlexClient
 
   @override
   Future<List<MediaItem>> fetchPlaylistItems(String id, {int offset = 0, int limit = 100}) async {
-    final result = await _getPlaylist(id, start: offset, size: limit);
-    return result.items.map((m) => PlexMappers.mediaItem(m)).toList();
+    final page = await fetchPlaylistPage(id, start: offset, size: limit);
+    return page.items;
   }
 
-  /// Plex-specific: paginated playlist content. Returns neutral [MediaItem]s.
-  /// The total size from the server is needed for paginated UI; tests in
-  /// `playlist_detail_screen.dart` rely on this.
-  Future<({List<MediaItem> items, int totalSize})> fetchPlaylistPage(
+  @override
+  Future<LibraryPage<MediaItem>> fetchPlaylistPage(
     String playlistId, {
     int? start,
     int? size,
     AbortController? abort,
   }) async {
     final result = await _getPlaylist(playlistId, start: start, size: size, abort: abort);
-    return (items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(), totalSize: result.totalSize);
+    return LibraryPage<MediaItem>(
+      items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(),
+      totalCount: result.totalSize,
+      offset: start ?? 0,
+    );
   }
 
   @override
   Future<List<MediaItem>> fetchCollections(String libraryId) async {
     final raw = await _getLibraryCollections(libraryId);
     return raw.map((m) => PlexMappers.mediaItem(m)).toList();
+  }
+
+  @override
+  Future<LibraryPage<MediaItem>> fetchCollectionsPage(
+    String libraryId, {
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final result = await _getLibraryCollectionsPage(libraryId, start: start, size: size, abort: abort);
+    return LibraryPage<MediaItem>(
+      items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(),
+      totalCount: result.totalSize,
+      offset: start ?? 0,
+    );
   }
 
   @override
@@ -3441,15 +3712,19 @@ class PlexClient
     return raw.map((m) => PlexMappers.mediaItem(m)).toList();
   }
 
-  /// Plex-specific: paginated person-media listing.
-  Future<({List<MediaItem> items, int totalSize})> fetchPersonMediaPage(
+  @override
+  Future<LibraryPage<MediaItem>> fetchPersonMediaPage(
     String personId, {
     int? start,
     int? size,
     AbortController? abort,
   }) async {
     final result = await _getPersonMedia(personId, start: start, size: size, abort: abort);
-    return (items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(), totalSize: result.totalSize);
+    return LibraryPage<MediaItem>(
+      items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(),
+      totalCount: result.totalSize,
+      offset: start ?? 0,
+    );
   }
 
   @override
@@ -3469,6 +3744,21 @@ class PlexClient
 
   @override
   Future<List<MediaItem>> fetchMoreHubItems(String hubId, {int? limit}) => fetchHubContent(hubId);
+
+  @override
+  Future<LibraryPage<MediaItem>> fetchMoreHubItemsPage(
+    String hubId, {
+    int? start,
+    int? size,
+    AbortController? abort,
+  }) async {
+    final result = await _getHubContentPage(hubId, start: start, size: size, abort: abort);
+    return LibraryPage<MediaItem>(
+      items: result.items.map((m) => PlexMappers.mediaItem(m)).toList(),
+      totalCount: result.totalSize,
+      offset: start ?? 0,
+    );
+  }
 
   /// Plex-specific: top-level folders in a library.
   Future<List<MediaItem>> fetchLibraryFolders(String sectionId) async {
@@ -3616,7 +3906,7 @@ class PlexClient
   // ── Downloads ────────────────────────────────────────────────────
 
   @override
-  Future<String?> resolveExternalPlaybackUrl(MediaItem item, {int mediaIndex = 0}) async {
+  Future<String?> resolveExternalPlaybackUrl(MediaItem item, {int mediaIndex = 0, String? mediaSourceId}) async {
     final playbackData = await getVideoPlaybackData(item.id, mediaIndex: mediaIndex);
     return playbackData.hasValidVideoUrl ? playbackData.videoUrl : null;
   }

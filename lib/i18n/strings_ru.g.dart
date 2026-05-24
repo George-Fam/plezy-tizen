@@ -376,6 +376,12 @@ class _TranslationsSettingsRu extends TranslationsSettingsEn {
 	@override String get displaySwitchDelay => 'Задержка переключения дисплея';
 	@override String get tunneledPlayback => 'Туннельное воспроизведение';
 	@override String get tunneledPlaybackDescription => 'Использовать видеотуннелирование. Отключите, если HDR показывает черный экран.';
+	@override String get dvConversionMode => 'Преобразование Dolby Vision';
+	@override String get dvConversionModeDescription => 'Выберите, как ExoPlayer обрабатывает файлы Dolby Vision Profile 7.';
+	@override String get dvConversionAuto => 'Авто';
+	@override String get dvConversionNative => 'Нативно / отключено';
+	@override String get dvConversionDv81 => 'P7 → P8.1';
+	@override String get dvConversionHevcStrip => 'P7 → HEVC';
 	@override String get requireProfileSelectionOnOpen => 'Запрашивать профиль при запуске';
 	@override String get requireProfileSelectionOnOpenDescription => 'Показывать выбор профиля при каждом открытии приложения';
 	@override String get forceTvMode => 'Принудительный режим ТВ';
@@ -569,7 +575,7 @@ class _TranslationsVideoControlsRu extends TranslationsVideoControlsEn {
 	@override String get nextChapterButton => 'Следующая глава';
 	@override String get muteButton => 'Без звука';
 	@override String get unmuteButton => 'Включить звук';
-	@override String get settingsButton => 'Настройки видео';
+	@override String get settingsButton => 'Настройки воспроизведения';
 	@override String get tracksButton => 'Аудио и субтитры';
 	@override String get chaptersButton => 'Главы';
 	@override String get versionsButton => 'Версии видео';
@@ -1296,7 +1302,6 @@ class _TranslationsVideoSettingsRu extends TranslationsVideoSettingsEn {
 	final TranslationsRu _root; // ignore: unused_field
 
 	// Translations
-	@override String get playbackSettings => 'Настройки воспроизведения';
 	@override String get playbackSpeed => 'Скорость воспроизведения';
 	@override String get sleepTimer => 'Таймер сна';
 	@override String get audioSync => 'Синхронизация аудио';
@@ -2033,6 +2038,12 @@ extension on TranslationsRu {
 			'settings.displaySwitchDelay' => 'Задержка переключения дисплея',
 			'settings.tunneledPlayback' => 'Туннельное воспроизведение',
 			'settings.tunneledPlaybackDescription' => 'Использовать видеотуннелирование. Отключите, если HDR показывает черный экран.',
+			'settings.dvConversionMode' => 'Преобразование Dolby Vision',
+			'settings.dvConversionModeDescription' => 'Выберите, как ExoPlayer обрабатывает файлы Dolby Vision Profile 7.',
+			'settings.dvConversionAuto' => 'Авто',
+			'settings.dvConversionNative' => 'Нативно / отключено',
+			'settings.dvConversionDv81' => 'P7 → P8.1',
+			'settings.dvConversionHevcStrip' => 'P7 → HEVC',
 			'settings.requireProfileSelectionOnOpen' => 'Запрашивать профиль при запуске',
 			'settings.requireProfileSelectionOnOpenDescription' => 'Показывать выбор профиля при каждом открытии приложения',
 			'settings.forceTvMode' => 'Принудительный режим ТВ',
@@ -2175,7 +2186,7 @@ extension on TranslationsRu {
 			'videoControls.nextChapterButton' => 'Следующая глава',
 			'videoControls.muteButton' => 'Без звука',
 			'videoControls.unmuteButton' => 'Включить звук',
-			'videoControls.settingsButton' => 'Настройки видео',
+			'videoControls.settingsButton' => 'Настройки воспроизведения',
 			'videoControls.tracksButton' => 'Аудио и субтитры',
 			'videoControls.chaptersButton' => 'Главы',
 			'videoControls.versionsButton' => 'Версии видео',
@@ -2301,14 +2312,14 @@ extension on TranslationsRu {
 			'profiles.signOut' => 'Выйти',
 			'profiles.signOutPlexTitle' => 'Выйти из Plex?',
 			'profiles.signOutPlexMessage' => ({required Object displayName}) => 'Удалить ${displayName} и всех пользователей Plex Home? Вы сможете войти снова в любое время.',
+			_ => null,
+		} ?? switch (path) {
 			'profiles.signedOutPlex' => 'Вы вышли из Plex.',
 			'profiles.signOutFailed' => 'Не удалось выйти.',
 			'profiles.sectionTitle' => 'Профили',
 			'profiles.summarySingle' => 'Добавьте профили, чтобы смешать управляемых пользователей и локальные идентификаторы',
 			'profiles.summaryMultipleWithActive' => ({required Object count, required Object activeName}) => '${count} профилей · активный: ${activeName}',
 			'profiles.summaryMultiple' => ({required Object count}) => '${count} профилей',
-			_ => null,
-		} ?? switch (path) {
 			'profiles.removeConnectionTitle' => 'Удалить соединение?',
 			'profiles.removeConnectionMessage' => ({required Object displayName, required Object connectionLabel}) => 'Удалить доступ ${displayName} к ${connectionLabel}. У других профилей он останется.',
 			'profiles.deleteProfileTitle' => 'Удалить профиль?',
@@ -2775,7 +2786,6 @@ extension on TranslationsRu {
 			'companionRemote.remote.subtitles' => 'Субтитры',
 			'companionRemote.remote.audio' => 'Аудио',
 			'companionRemote.remote.searchHint' => 'Поиск на десктопе...',
-			'videoSettings.playbackSettings' => 'Настройки воспроизведения',
 			'videoSettings.playbackSpeed' => 'Скорость воспроизведения',
 			'videoSettings.sleepTimer' => 'Таймер сна',
 			'videoSettings.audioSync' => 'Синхронизация аудио',
@@ -2816,13 +2826,13 @@ extension on TranslationsRu {
 			'metadataEdit.poster' => 'Постер',
 			'metadataEdit.background' => 'Фон',
 			'metadataEdit.logo' => 'Логотип',
+			_ => null,
+		} ?? switch (path) {
 			'metadataEdit.squareArt' => 'Квадратное изображение',
 			'metadataEdit.selectPoster' => 'Выбрать постер',
 			'metadataEdit.selectBackground' => 'Выбрать фон',
 			'metadataEdit.selectLogo' => 'Выбрать логотип',
 			'metadataEdit.selectSquareArt' => 'Выбрать квадратное изображение',
-			_ => null,
-		} ?? switch (path) {
 			'metadataEdit.fromUrl' => 'По URL',
 			'metadataEdit.uploadFile' => 'Загрузить файл',
 			'metadataEdit.enterImageUrl' => 'Введите URL изображения',
