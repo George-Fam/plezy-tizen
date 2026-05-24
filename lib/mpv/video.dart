@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'player/player.dart';
+import 'player/subtitle_stream_support.dart';
 import 'player/video_rect_support.dart';
 
 /// Video widget for displaying player output.
@@ -61,6 +62,11 @@ class _VideoState extends State<Video> {
           // Video rendering area
           _buildVideoSurface(),
 
+          // Subtitle overlay for players that stream subtitle text to Flutter
+          // (e.g. PlayerTizen, where the video renders in a native overlay window)
+          if (widget.player is SubtitleStreamSupport)
+            _SubtitleOverlay(player: widget.player as SubtitleStreamSupport),
+
           // Controls overlay
           if (widget.controls != null) widget.controls!(context),
         ],
@@ -113,6 +119,61 @@ class _VideoState extends State<Video> {
       right: ((position.dx + size.width) * dpr).toInt(),
       bottom: ((position.dy + size.height) * dpr).toInt(),
       devicePixelRatio: dpr,
+    );
+  }
+}
+
+/// Subtitle text overlay for [SubtitleStreamSupport] players.
+/// Renders the current subtitle cue as a Flutter widget, positioned above
+/// the player controls (inserted between the video surface and controls layers).
+class _SubtitleOverlay extends StatefulWidget {
+  final SubtitleStreamSupport player;
+  const _SubtitleOverlay({required this.player});
+
+  @override
+  State<_SubtitleOverlay> createState() => _SubtitleOverlayState();
+}
+
+class _SubtitleOverlayState extends State<_SubtitleOverlay> {
+  String _text = '';
+  StreamSubscription<String>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = widget.player.subtitleTextStream.listen((t) {
+      if (mounted) setState(() => _text = t);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_text.isEmpty) return const SizedBox.shrink();
+    return Positioned(
+      left: 20,
+      right: 20,
+      bottom: 60,
+      child: IgnorePointer(
+        child: Text(
+          _text,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 28,
+            height: 1.3,
+            shadows: [
+              Shadow(color: Colors.black, offset: Offset(1, 1), blurRadius: 3),
+              Shadow(color: Colors.black, offset: Offset(-1, -1), blurRadius: 3),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

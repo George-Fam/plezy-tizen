@@ -119,6 +119,18 @@ namespace Runner
                     SetDisplayMode(Convert.ToInt32(args?["mode"] ?? call.Arguments));
                     return null;
 
+                case "selectAudioTrack":
+                    SelectAudioTrack(Convert.ToInt32(args?["index"]));
+                    return null;
+
+                case "selectSubtitleTrack":
+                    SelectSubtitleTrack(Convert.ToInt32(args?["index"]));
+                    return null;
+
+                case "setVisible":
+                    SetVisible(Convert.ToBoolean(args?["visible"]));
+                    return null;
+
                 case "dispose":
                     DisposePlayer();
                     return null;
@@ -190,6 +202,15 @@ namespace Runner
                 Post(() =>
                     _eventSink?.Success(new Dictionary<string, object> { ["event"] = "completed" }));
 
+            _player.SubtitleUpdated += (s, e) =>
+                Post(() =>
+                    _eventSink?.Success(new Dictionary<string, object>
+                    {
+                        ["event"] = "subtitle",
+                        ["text"] = e.Text ?? "",
+                        ["durationMs"] = (int)e.Duration,
+                    }));
+
             _player.BufferingProgressChanged += (s, e) =>
                 Post(() =>
                     _eventSink?.Success(new Dictionary<string, object>
@@ -243,6 +264,48 @@ namespace Runner
             }
             catch { }
 
+            // Enumerate audio and embedded subtitle tracks via PlayerTrackInfo.
+            var audioTracks = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
+            var embeddedSubtitleTracks = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
+            // PlayerTrackInfo exposes no Count — enumerate by index until GetLanguageCode throws.
+            // PlayerTrackInfo exposes no Count — enumerate by index until GetLanguageCode throws.
+            try
+            {
+                var info = _player.AudioTrackInfo;
+                int current = info.Selected;
+                for (int i = 0; i < 32; i++)
+                {
+                    string lang;
+                    try { lang = info.GetLanguageCode(i) ?? ""; }
+                    catch { break; }
+                    audioTracks.Add(new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["index"] = i,
+                        ["language"] = lang,
+                        ["isDefault"] = i == current,
+                    });
+                }
+            }
+            catch { }
+            try
+            {
+                var info = _player.SubtitleTrackInfo;
+                int current = info.Selected;
+                for (int i = 0; i < 32; i++)
+                {
+                    string lang;
+                    try { lang = info.GetLanguageCode(i) ?? ""; }
+                    catch { break; }
+                    embeddedSubtitleTracks.Add(new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["index"] = i,
+                        ["language"] = lang,
+                        ["isDefault"] = i == current,
+                    });
+                }
+            }
+            catch { }
+
             Post(() => _eventSink?.Success(new Dictionary<string, object>
             {
                 ["event"] = "initialized",
@@ -254,6 +317,8 @@ namespace Runner
                 ["audioSampleRate"] = audioSampleRate,
                 ["audioChannels"] = audioChannels,
                 ["decoderType"] = decoderType ?? "",
+                ["audioTracks"] = audioTracks,
+                ["embeddedSubtitleTracks"] = embeddedSubtitleTracks,
             }));
 
             // System.Timers.Timer runs on the thread pool. _eventSink.Success()
@@ -281,6 +346,41 @@ namespace Runner
             {
                 Log($"{e.Message}", isError: true);
             }
+        }
+
+        // ── Track selection ──────────────────────────────────────────────────
+
+        private void SelectAudioTrack(int index)
+        {
+            try { _player.AudioTrackInfo.Selected = index; }
+            catch (Exception e) { Log($"SelectAudioTrack failed: {e.Message}", isError: true); }
+        }
+
+        private void SelectSubtitleTrack(int index)
+        {
+            try { _player.SubtitleTrackInfo.Selected = index; }
+            catch (Exception e) { Log($"SelectSubtitleTrack failed: {e.Message}", isError: true); }
+        }
+
+        // ── Visibility ───────────────────────────────────────────────────────
+
+        private void SetVisible(bool visible)
+        {
+            if (_videoWindow == null) return;
+            try
+            {
+                if (visible)
+                {
+                    _videoWindow.Show();
+                    _videoWindow.Lower();
+                    SetEmptyInputRegion();
+                }
+                else
+                {
+                    _videoWindow.Hide();
+                }
+            }
+            catch (Exception e) { Log($"SetVisible failed: {e.Message}", isError: true); }
         }
 
         // ── Position timer ───────────────────────────────────────────────────
