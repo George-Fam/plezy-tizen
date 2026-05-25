@@ -17,14 +17,9 @@ import '../video_rect_support.dart';
 // Parsed subtitle cue.
 typedef _SubCue = ({int startMs, int endMs, String text});
 
-/// Tizen player backend using a native C# overlay player (TizenMediaPlayer.cs).
-///
-/// Replaces video_player_tizen's TBM-surface-through-Flutter-GPU approach with
-/// Tizen's hardware compositor overlay (Display(MediaView)), which renders video
-/// on a separate hardware plane and returns the GPU fully to the Flutter UI.
-///
-/// Video rect coordinates are sent to the native side whenever the widget layout
-/// changes, so the MediaView tracks the Flutter widget's screen position.
+/// Tizen TV player backend using a native C# hardware overlay (TizenMediaPlayer.cs).
+/// Video renders via Display(ElmSharp.Window) on a separate hardware plane, keeping
+/// Flutter's GPU free. Video rect updates keep the overlay in sync with the widget.
 class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRectSupport, SubtitleStreamSupport {
   static const _method = MethodChannel('com.plezy/tizen_player');
   static const _event = EventChannel('com.plezy/tizen_player/events');
@@ -206,10 +201,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
 
   // ── VideoRectSupport ──────────────────────────────────────────────────────
 
-  /// Called by the Video widget whenever layout changes.
-  /// Forwards the physical-pixel rect to the native MediaView.
-  /// Coordinates are already in physical pixels (logical × dpr done by the
-  /// caller); SetRoi on the C# side uses them directly — no further scaling.
+  /// Called by the Video widget on layout change; forwards physical-pixel rect to C#.
   @override
   Future<void> setVideoRect({
     required int left,
@@ -240,6 +232,8 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     bool play = true,
     bool isLive = false,
     List<SubtitleTrack>? externalSubtitles,
+    Duration timelineOffset = Duration.zero,
+    Duration? timelineDuration,
   }) async {
     if (_disposed) return;
     _firstFrameFired = false;

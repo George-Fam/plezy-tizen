@@ -7,23 +7,10 @@ using Tizen.Flutter.Embedding;
 namespace Runner
 {
     /// <summary>
-    /// TV-appropriate stub for the window_manager Flutter plugin.
-    ///
-    /// window_manager has no Tizen implementation. Rather than scattering
-    /// isTizen() guards throughout the Dart codebase, this stub registers on
-    /// the same "window_manager" channel and returns sensible TV defaults so
-    /// all Dart code that calls window_manager works correctly without any
-    /// platform-specific branches.
-    ///
-    /// TV semantics:
-    ///   isFullScreen / isMaximized  - true  (TV apps are always fullscreen)
-    ///   isFocused / isVisible       - true
-    ///   isAlwaysOnTop               - false (concept does not exist on TV)
-    ///   isMinimized                 - false
-    ///   All setters / listeners     - no-op (TV window state is fixed by OS)
-    ///
-    /// getSize returns the actual screen resolution via Elementary.GetScreenSize()
-    /// so 4K TVs report 3840×2160 rather than a hardcoded 1920×1080.
+    /// Tizen TV stub for the window_manager Flutter plugin.
+    /// Registers on the same channel and returns fixed TV defaults (always fullscreen,
+    /// maximized, focused; all setters are no-ops) so Dart code that calls
+    /// window_manager works without platform branches.
     /// </summary>
     internal class TizenWindowManager
     {

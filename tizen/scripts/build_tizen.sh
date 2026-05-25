@@ -19,11 +19,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE_NAME="tizen_signing"
 
 MODE="--release"
+EXTRA_ARGS=()
 for arg in "$@"; do
 	if [[ "$arg" == "--debug" ]]; then
 		MODE="--debug"
-		shift
-		break
+	else
+		EXTRA_ARGS+=("$arg")
 	fi
 done
 
@@ -31,6 +32,9 @@ done
 # can pick it up. Mirrors the Android keystore / macOS certificate pattern in
 # .github/workflows/build.yml.
 if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
+	: "${TIZEN_AUTHOR_CERT_PASSWORD:?Missing TIZEN_AUTHOR_CERT_PASSWORD}"
+	: "${TIZEN_DIST_CERT_BASE64:?Missing TIZEN_DIST_CERT_BASE64}"
+	: "${TIZEN_DIST_CERT_PASSWORD:?Missing TIZEN_DIST_CERT_PASSWORD}"
 	CERT_DIR="$HOME/.tizen-studio/keystore/signing/$PROFILE_NAME"
 	mkdir -p "$CERT_DIR"
 
@@ -57,4 +61,4 @@ fi
 flutter-tizen build tpk \
 	$MODE \
 	--dart-define=TIZEN_BUILD=true \
-	"$@"
+	"${EXTRA_ARGS[@]}"

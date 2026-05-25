@@ -145,6 +145,17 @@ class _SubtitleOverlayState extends State<_SubtitleOverlay> {
   }
 
   @override
+  void didUpdateWidget(_SubtitleOverlay old) {
+    super.didUpdateWidget(old);
+    if (old.player != widget.player) {
+      _sub?.cancel();
+      _sub = widget.player.subtitleTextStream.listen((t) {
+        if (mounted) setState(() => _text = t);
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _sub?.cancel();
     super.dispose();

@@ -8,9 +8,8 @@ using ElmSharp;
 using Tizen.Flutter.Embedding;
 using Tizen.Multimedia;
 
-// EFL P/Invoke for making the video window transparent to all input events.
-// An empty Wayland input region causes keyboard/pointer events to fall through
-// to Flutter's DALi window instead of being consumed by the video window.
+// P/Invoke to clear the video window's Wayland input region so keyboard/pointer
+// events fall through to Flutter's DALi window instead of being consumed here.
 internal static class WlInput
 {
     [DllImport("libevas.so.1")]
@@ -30,16 +29,9 @@ internal static class WlInput
 namespace Runner
 {
     /// <summary>
-    /// Native Tizen media player that renders video via Tizen's hardware compositor
-    /// overlay instead of Flutter's GPU texture system.
-    ///
-    /// video_player_tizen uses PLAYER_DISPLAY_TYPE_NONE and passes every decoded frame
-    /// through Flutter's GPU compositor via TBM surfaces. On a Mali-G52 with 4K content
-    /// this saturates the GPU, leaving ~10fps for the Flutter UI.
-    ///
-    /// This implementation uses Display(NUI.Window) + DisplaySettings.SetRoi() which
-    /// routes video through Tizen's hardware video plane — completely separate from
-    /// Flutter's render pipeline — giving the GPU back to the UI.
+    /// Native Tizen TV media player using hardware compositor overlay.
+    /// Renders video via Display(ElmSharp.Window) + DisplaySettings.SetRoi() on a
+    /// dedicated hardware plane, keeping Flutter's GPU free for the UI.
     /// </summary>
     internal class TizenMediaPlayer : IEventStreamHandler, IDisposable
     {
@@ -63,8 +55,7 @@ namespace Runner
 
         public void Setup()
         {
-            // Capture the platform (main) thread's SynchronizationContext here —
-            // Setup() is called from App.OnCreate() which runs on the main thread.
+            // Capture the main thread's SynchronizationContext (Setup() is called from App.OnCreate()).
             _mainContext = SynchronizationContext.Current ?? new SynchronizationContext();
 
             var methodChannel = new MethodChannel("com.plezy/tizen_player");
@@ -156,15 +147,11 @@ namespace Runner
 
             _player = new Player();
 
-            // Use NUI.Window directly — Display(Tizen.NUI.Window) is a supported ctor.
-            // SetRoi positions the video within the window matching the Flutter widget.
             if (_videoWindow != null)
             {
                 try
                 {
-                    // Display(ElmSharp.Window) uses the correct EWL handle format
-                    // for player_set_display(OVERLAY) — avoids the raw P/Invoke handle
-                    // mismatch that caused EINVAL with our previous attempts.
+                    // Display(ElmSharp.Window) uses the correct EWL handle format for player_set_display(OVERLAY).
                     _player.Display = new Display(_videoWindow);
                     _player.DisplaySettings.Mode = PlayerDisplayMode.FullScreen;
                     _player.DisplaySettings.IsVisible = true;
@@ -175,12 +162,8 @@ namespace Runner
                     // to Flutter's DALi window (which has Wayland keyboard focus).
                     SetEmptyInputRegion();
 
-                    // XF86Back is a privileged Tizen TV key — the system intercepts it
-                    // before the Wayland compositor delivers it to the focused window.
-                    // KeyGrab routes it exclusively to this EFL window regardless of
-                    // focus, bypassing the system intercept. We relay it to Flutter via
-                    // the event channel. AllowFocus is no longer called, so EFL delivers
-                    // key events to this window normally.
+                    // KeyGrab captures XF86Back/Back exclusively (privileged TV keys the system
+                    // intercepts before Wayland) and relays them to Flutter via the event channel.
                     _videoWindow.KeyGrab("XF86Back", false);
                     _videoWindow.KeyGrab("Back", false);
                     _videoWindow.KeyDown += OnVideoWindowKeyDown;
@@ -242,6 +225,13 @@ namespace Runner
 
             // A newer open() call arrived while PrepareAsync was awaited — discard.
             if (gen != _openGeneration) return;
+
+            var startMs = args?["startMs"] != null ? Convert.ToInt32(args["startMs"]) : 0;
+            if (startMs > 0)
+            {
+                try { await _player.SetPlayPositionAsync(startMs, false); }
+                catch { }
+            }
 
             int durationMs = _player.StreamInfo.GetDuration();
             int width = 0, height = 0;
@@ -320,9 +310,8 @@ namespace Runner
                 ["embeddedSubtitleTracks"] = embeddedSubtitleTracks,
             }));
 
-            // System.Timers.Timer runs on the thread pool. _eventSink.Success()
-            // is called from the Elapsed handler; pending events from player
-            // native callbacks are also drained there via _pendingEvents queue.
+            // System.Timers.Timer runs on the thread pool; Post() marshals back to
+            // the EFL main thread where platform channel calls must be made.
             _positionTimer = new System.Timers.Timer(250);
             _positionTimer.Elapsed += OnPositionTick;
             _positionTimer.AutoReset = true;
@@ -512,20 +501,21 @@ namespace Runner
             catch { }
         }
 
-        // Display modes cycling: 0=FullScreen(stretch), 1=LetterBox(original ratio), 2=CroppedFull(crop to fill)
+        // Display modes: 0=contain(letterbox), 1=cover(crop), 2=fill(stretch) — matches Dart's boxFitMode ordering.
         private static readonly PlayerDisplayMode[] DisplayModes =
         {
-            PlayerDisplayMode.FullScreen,
-            PlayerDisplayMode.LetterBox,
-            PlayerDisplayMode.CroppedFull,
+            PlayerDisplayMode.LetterBox,   // 0 = contain
+            PlayerDisplayMode.CroppedFull, // 1 = cover
+            PlayerDisplayMode.FullScreen,  // 2 = fill/stretch
         };
 
         private void SetDisplayMode(int mode)
         {
             if (_player == null) return;
+            if (mode < 0 || mode >= DisplayModes.Length) return;
             try
             {
-                var m = DisplayModes[mode % DisplayModes.Length];
+                var m = DisplayModes[mode];
                 _currentDisplayMode = m;
                 _player.DisplaySettings.Mode = m;
             }
@@ -566,10 +556,8 @@ namespace Runner
             };
 
 
-        /// Posts <paramref name="action"/> to the platform main thread via the
-        /// SynchronizationContext captured in Setup(). Native player callbacks and
-        /// the System.Timers.Timer tick run on thread-pool threads; Flutter channel
-        /// calls must be on the platform thread.
+        // Marshals action to the EFL main thread (native callbacks and timer ticks
+        // run on the thread pool; Flutter channel calls must be on the main thread).
         private void Post(Action action)
             => _mainContext.Post(_ => action(), null);
 
