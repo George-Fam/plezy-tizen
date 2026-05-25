@@ -14,14 +14,8 @@ namespace Runner
 
             GeneratedPluginRegistrant.RegisterPlugins(this);
 
-            // flutter-tizen creates its DALi window with transparent=1, so the Flutter
-            // surface shows transparent pixels wherever no widget draws.
-            //
-            // Create a dedicated EFL window for video rendering and lower it beneath
-            // Flutter's window. The player renders into it via Display(ElmSharp.Window),
-            // which uses the correct EWL handle format for player_set_display(OVERLAY).
-            // The VideoRectSupport path returns SizedBox.expand() (transparent), so video
-            // shows through the hole in Flutter's surface.
+            // EFL window for video rendering, lowered beneath Flutter's DALi window so
+            // video shows through the transparent hole left by VideoRectSupport.
             Window videoWindow = null;
             try
             {
