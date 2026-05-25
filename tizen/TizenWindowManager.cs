@@ -17,11 +17,10 @@ namespace Runner
         private readonly int _screenWidth;
         private readonly int _screenHeight;
 
-        public TizenWindowManager()
+        public TizenWindowManager(int screenWidth, int screenHeight)
         {
-            var size = Elementary.ScreenSize;
-            _screenWidth = size.Width;
-            _screenHeight = size.Height;
+            _screenWidth = screenWidth;
+            _screenHeight = screenHeight;
         }
 
         public void Setup()
