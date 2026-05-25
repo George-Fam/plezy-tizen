@@ -53,23 +53,27 @@ if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 	echo "$TIZEN_AUTHOR_CERT_BASE64" | base64 --decode >"$CERT_DIR/author.p12"
 	echo "$TIZEN_DIST_CERT_BASE64" | base64 --decode >"$CERT_DIR/distributor.p12"
 
-	PROFILES_DIR="$TIZEN_SDK_DATA_PATH/profile"
-	mkdir -p "$PROFILES_DIR"
+	# tizen security-profiles add stores passwords in GNOME keyring and writes
+	# password="" in profiles.xml. The tz signing tool reads from the keyring at
+	# build time. Writing plain-text passwords directly into profiles.xml causes
+	# "wrong crypted size" because tz always expects either an encrypted value or
+	# an empty string (keyring lookup).
+	#
+	# Start a D-Bus session and unlock GNOME keyring if not already running.
+	if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+		eval "$(dbus-launch --sh-syntax)"
+		export DBUS_SESSION_BUS_ADDRESS
+	fi
+	echo "" | gnome-keyring-daemon --unlock --replace --components=secrets,pkcs11 2>/dev/null || true
 
-	# Write the profile XML that flutter-tizen reads via sdkDataDirectory/profile/profiles.xml.
-	# The active= attribute is required: flutter-tizen reads it to select the signing profile.
-	# Passwords are stored in plain-text here; the file is 0600 and ephemeral in CI.
-	cat >"$PROFILES_DIR/profiles.xml" <<XML
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<profiles version="3.1" active="$PROFILE_NAME">
-  <profile name="$PROFILE_NAME">
-    <profileitem ca="" distributor="0" key="$CERT_DIR/author.p12" password="${TIZEN_AUTHOR_CERT_PASSWORD}" rootca=""/>
-    <profileitem ca="" distributor="2" key="$CERT_DIR/distributor.p12" password="${TIZEN_DIST_CERT_PASSWORD}" rootca=""/>
-  </profile>
-</profiles>
-XML
-	chmod 0600 "$PROFILES_DIR/profiles.xml"
-	echo "Certificate profile written to $PROFILES_DIR/profiles.xml"
+	tizen security-profiles add \
+		-n "$PROFILE_NAME" \
+		-a "$CERT_DIR/author.p12" \
+		-p "$TIZEN_AUTHOR_CERT_PASSWORD" \
+		-d "$CERT_DIR/distributor.p12" \
+		-dp "$TIZEN_DIST_CERT_PASSWORD" \
+		-A -f
+	echo "Certificate profile '$PROFILE_NAME' registered via tizen security-profiles"
 fi
 
 flutter-tizen build tpk \
