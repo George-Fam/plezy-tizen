@@ -9,6 +9,15 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Sync tizen-manifest.xml version from pubspec.yaml (e.g. "2.2.0+100" -> "2.2.0").
+PUBSPEC_VERSION="$(grep '^version:' "$REPO_ROOT/pubspec.yaml" | sed 's/version:[[:space:]]*//' | sed 's/+.*//' | tr -d '[:space:]')"
+if [[ -n "$PUBSPEC_VERSION" ]]; then
+	sed -i "s/version=\"[^\"]*\"/version=\"$PUBSPEC_VERSION\"/" "$REPO_ROOT/tizen/tizen-manifest.xml"
+fi
+
 MODE="--release"
 EXTRA_ARGS=()
 for arg in "$@"; do
