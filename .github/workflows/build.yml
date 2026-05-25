@@ -818,8 +818,19 @@ jobs:
 
       - name: Setup flutter-tizen
         run: |
-          git clone https://github.com/flutter-tizen/flutter-tizen.git $HOME/flutter-tizen
+          git clone --depth 1 --branch 3.41.9-tizen.1.0.0 \
+            https://github.com/flutter-tizen/flutter-tizen.git $HOME/flutter-tizen
           echo "$HOME/flutter-tizen/bin" >> $GITHUB_PATH
+
+      - name: Setup Tizen Studio CLI
+        run: |
+          wget -q https://download.tizen.org/sdk/Installer/tizen-studio_6.0/web-cli_Tizen_Studio_6.0_ubuntu-64.bin \
+            -O tizen-studio-cli.bin
+          chmod +x tizen-studio-cli.bin
+          ./tizen-studio-cli.bin --accept-license "$HOME/tizen-studio" 2>&1 | tail -5
+          rm tizen-studio-cli.bin
+          echo "$HOME/tizen-studio/tools" >> $GITHUB_PATH
+          echo "$HOME/tizen-studio/tools/ide/bin" >> $GITHUB_PATH
 
       - name: Setup Tizen .NET SDK
         run: |
