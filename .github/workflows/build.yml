@@ -801,7 +801,7 @@ jobs:
             plezy-linux-arm64.pkg.tar.zst
 
   build-tizen:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       id-token: write
       attestations: write
@@ -809,35 +809,68 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.41.9'
-          cache: true
-          pub-cache: false
-
-      - name: Setup flutter-tizen
+      - name: Install Tizen Dependencies
         run: |
-          git clone --depth 1 --branch 3.41.9-tizen.1.0.0 \
-            https://github.com/flutter-tizen/flutter-tizen.git $HOME/flutter-tizen
-          echo "$HOME/flutter-tizen/bin" >> $GITHUB_PATH
+          sudo apt-get update -y
+          sudo apt-get install -y curl file git make unzip xz-utils zip \
+           software-properties-common wget \
+           libkf5itemmodels5 libkf5kiowidgets5 libkchart2 gettext cpio \
+           rpm2cpio dbus dbus-x11 gnome-keyring libsecret-tools
+          sudo add-apt-repository ppa:deadsnakes/ppa -y
+          sudo add-apt-repository ppa:dotnet/backports -y
+          sudo apt-get update -y
+          # Python 3.8 install prompts for timezone config if not preset
+          sudo ln -snf /usr/share/zoneinfo/UTC /etc/localtime
+          echo "UTC" | sudo tee /etc/timezone
+          sudo apt-get install -y python3.8 libpython3.8 dotnet-sdk-10.0
+          wget -q "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb" \
+           -O /tmp/libtinfo5.deb
+          sudo dpkg -i /tmp/libtinfo5.deb
+          rm /tmp/libtinfo5.deb
 
-      - name: Setup Tizen Studio CLI
+      - name: Cache flutter-tizen
+        id: cache-flutter-tizen
+        uses: actions/cache@v4
+        with:
+          path: ~/flutter-tizen
+          key: flutter-tizen-3.41.9-tizen.1.0.0
+
+      - name: Setup flutter-tizen & Flutter
+        run: |
+          if [[ "${{ steps.cache-flutter-tizen.outputs.cache-hit }}" != 'true' ]]; then
+            git clone --depth 1 --branch 3.41.9-tizen.1.0.0 \
+              https://github.com/flutter-tizen/flutter-tizen.git $HOME/flutter-tizen
+            # Bootstrap: downloads the Flutter SDK and Dart into the clone
+            $HOME/flutter-tizen/bin/flutter-tizen
+          fi
+          # $GITHUB_PATH additions only take effect in subsequent steps
+          echo "$HOME/flutter-tizen/bin" >> $GITHUB_PATH
+          echo "$HOME/flutter-tizen/flutter/bin" >> $GITHUB_PATH
+
+      - name: Cache Tizen Studio
+        id: cache-tizen-studio
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/tizen-studio
+            ~/tizen-studio-data
+          key: tizen-studio-6.0-NativeToolchain-Gcc-9.2-IOT-Headed-6.0
+
+      - name: Setup Tizen Studio CLI & Tizen Packages
+        if: steps.cache-tizen-studio.outputs.cache-hit != 'true'
         run: |
           wget -q https://download.tizen.org/sdk/Installer/tizen-studio_6.0/web-cli_Tizen_Studio_6.0_ubuntu-64.bin \
             -O tizen-studio-cli.bin
           chmod +x tizen-studio-cli.bin
-          ./tizen-studio-cli.bin --accept-license "$HOME/tizen-studio" 2>&1 | tail -5
-          rm tizen-studio-cli.bin
+          ./tizen-studio-cli.bin --accept-license "$HOME/tizen-studio"
+          rm -f tizen-studio-cli.bin
+          "$HOME/tizen-studio/package-manager/package-manager-cli.bin" \
+            install --no-java-check --accept-license NativeToolchain-Gcc-9.2 IOT-Headed-6.0-NativeAppDevelopment
+
+      - name: Add Tizen Studio to PATH
+        run: |
           echo "$HOME/tizen-studio/tools" >> $GITHUB_PATH
           echo "$HOME/tizen-studio/tools/ide/bin" >> $GITHUB_PATH
-
-      - name: Setup Tizen .NET SDK
-        run: |
-          wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
-          sudo dpkg -i packages-microsoft-prod.deb
-          sudo apt-get update
-          sudo apt-get install -y dotnet-sdk-8.0
 
       - name: Cache Pub dependencies
         uses: actions/cache@v4
@@ -848,6 +881,15 @@ jobs:
 
       - name: Install dependencies
         run: flutter-tizen pub get --enforce-lockfile --no-example
+
+      - name: Start D-Bus session and unlock GNOME keyring
+        # Required for Tizen Studio signing: tizen security-profiles add stores
+        # certificate passwords in keyring, which needs a live D-Bus
+        # session and an unlocked keyring daemon to accept them.
+        run: |
+          eval "$(dbus-launch --sh-syntax)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
+          echo "" | gnome-keyring-daemon --unlock --replace --components=secrets,pkcs11
 
       - name: Build Tizen TPK
         env:

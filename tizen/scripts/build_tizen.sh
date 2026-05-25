@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # Build a signed Tizen TPK for distribution.
 #
 # Local dev usage (uses your active Tizen Studio profile):
@@ -37,8 +38,7 @@ for arg in "$@"; do
 done
 
 # If CI credentials are present, write the certificate profile so flutter-tizen
-# can pick it up. Mirrors the Android keystore / macOS certificate pattern in
-# .github/workflows/build.yml.
+# can pick it up.
 if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 	: "${TIZEN_AUTHOR_CERT_PASSWORD:?Missing TIZEN_AUTHOR_CERT_PASSWORD}"
 	: "${TIZEN_DIST_CERT_BASE64:?Missing TIZEN_DIST_CERT_BASE64}"
@@ -58,14 +58,6 @@ if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 	# build time. Writing plain-text passwords directly into profiles.xml causes
 	# "wrong crypted size" because tz always expects either an encrypted value or
 	# an empty string (keyring lookup).
-	#
-	# Start a D-Bus session and unlock GNOME keyring if not already running.
-	if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-		eval "$(dbus-launch --sh-syntax)"
-		export DBUS_SESSION_BUS_ADDRESS
-	fi
-	echo "" | gnome-keyring-daemon --unlock --replace --components=secrets,pkcs11 2>/dev/null || true
-
 	tizen security-profiles add \
 		-n "$PROFILE_NAME" \
 		-a "$CERT_DIR/author.p12" \
