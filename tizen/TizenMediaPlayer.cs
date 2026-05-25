@@ -21,7 +21,7 @@ internal static class WlInput
     [DllImport("libecore_evas.so.1")]
     internal static extern IntPtr ecore_evas_wayland2_window_get(IntPtr ee);
 
-    // Setting w=0, h=0 creates an empty region — the window receives no input.
+    // Setting w=0, h=0 creates an empty region; the window receives no input.
     [DllImport("libecore_wl2.so.1")]
     internal static extern void ecore_wl2_window_input_region_set(IntPtr win, int x, int y, int w, int h);
 }
@@ -176,10 +176,10 @@ namespace Runner
             }
             else
             {
-                Log("Video window unavailable — video overlay disabled", isError: true);
+                Log("Video window unavailable, video overlay disabled", isError: true);
             }
 
-            // Player events fire on native threads — dispatch directly to the
+            // Player events fire on native threads; dispatch directly to the
             // EFL main loop (same thread Flutter's platform channels run on).
             _player.PlaybackCompleted += (s, e) =>
                 Post(() =>
@@ -223,7 +223,7 @@ namespace Runner
                 return;
             }
 
-            // A newer open() call arrived while PrepareAsync was awaited — discard.
+            // A newer open() call arrived while PrepareAsync was awaited; discard.
             if (gen != _openGeneration) return;
 
             var startMs = args?["startMs"] != null ? Convert.ToInt32(args["startMs"]) : 0;
@@ -257,7 +257,7 @@ namespace Runner
             // Enumerate audio and embedded subtitle tracks via PlayerTrackInfo.
             var audioTracks = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
             var embeddedSubtitleTracks = new System.Collections.Generic.List<System.Collections.Generic.Dictionary<string, object>>();
-            // PlayerTrackInfo exposes no Count — enumerate by index until GetLanguageCode throws.
+            // PlayerTrackInfo exposes no Count; enumerate by index until GetLanguageCode throws.
             try
             {
                 var info = _player.AudioTrackInfo;
@@ -456,7 +456,7 @@ namespace Runner
             _pendingSeekMs = positionMs;
 
             // If a seek is already running, let it finish and it will pick up
-            // _pendingSeekMs automatically — don't stack another async chain.
+            // _pendingSeekMs automatically; don't stack another async chain.
             if (_isSeeking) return;
 
             _isSeeking = true;
@@ -501,7 +501,7 @@ namespace Runner
             catch { }
         }
 
-        // Display modes: 0=contain(letterbox), 1=cover(crop), 2=fill(stretch) — matches Dart's boxFitMode ordering.
+        // Display modes: 0=contain(letterbox), 1=cover(crop), 2=fill(stretch), matches Dart's boxFitMode ordering.
         private static readonly PlayerDisplayMode[] DisplayModes =
         {
             PlayerDisplayMode.LetterBox,   // 0 = contain
@@ -528,7 +528,7 @@ namespace Runner
             try
             {
                 // Coordinates arrive as physical pixels (Dart already multiplied by dpr).
-                // Pass them straight to SetRoi — no further scaling needed.
+                // Pass them straight to SetRoi; no further scaling needed.
                 int left = Convert.ToInt32(args["left"]);
                 int top = Convert.ToInt32(args["top"]);
                 int right = Convert.ToInt32(args["right"]);
@@ -581,7 +581,7 @@ namespace Runner
                 var ecoreEv = WlInput.ecore_evas_ecore_evas_get(evas);
                 var wlWin = WlInput.ecore_evas_wayland2_window_get(ecoreEv);
                 WlInput.ecore_wl2_window_input_region_set(wlWin, 0, 0, 0, 0);
-                Log("Video window input region cleared — keyboard falls through to Flutter");
+                Log("Video window input region cleared; keyboard falls through to Flutter");
             }
             catch (Exception e)
             {
