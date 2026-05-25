@@ -123,9 +123,7 @@ class _VideoState extends State<Video> {
   }
 }
 
-/// Subtitle text overlay for [SubtitleStreamSupport] players.
-/// Renders the current subtitle cue as a Flutter widget, positioned above
-/// the player controls (inserted between the video surface and controls layers).
+/// Subtitle overlay for [SubtitleStreamSupport] players (e.g. PlayerTizen).
 class _SubtitleOverlay extends StatefulWidget {
   final SubtitleStreamSupport player;
   const _SubtitleOverlay({required this.player});

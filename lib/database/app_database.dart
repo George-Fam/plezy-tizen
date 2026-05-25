@@ -560,8 +560,7 @@ class AppDatabase extends _$AppDatabase {
 
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    // Tizen doesnt expose libsqlite3.so; route through sqflite_tizen which
-    // wraps Tizen's internal SQLite via the app-data API.
+    // Tizen doesn't expose libsqlite3.so; sqflite_tizen wraps the internal SQLite.
     if (PlatformDetector.isTizen()) {
       return SqfliteQueryExecutor(path: 'plezy.db', logStatements: false);
     }

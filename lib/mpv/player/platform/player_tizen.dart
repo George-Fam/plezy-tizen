@@ -35,9 +35,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   bool _disposed = false;
   bool _firstFrameFired = false;
 
-  // Broadcasts native key names relayed from the ElmSharp video window.
-  // Subscribers (VideoPlayerScreen) use this to handle back/d-pad while
-  // the video window has Wayland keyboard focus.
+  // Back/d-pad keys intercepted by the ElmSharp window, relayed to Dart.
   final _nativeKeyController = StreamController<String>.broadcast();
   Stream<String> get nativeKeyStream => _nativeKeyController.stream;
 
@@ -46,24 +44,18 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   int _lastPositionEmitMs = 0;
 
   // ── Track state ────────────────────────────────────────────────────────────
-  // Capi-enumerated tracks (populated on 'initialized' event).
   List<AudioTrack> _capiAudioTracks = const [];
   List<SubtitleTrack> _capiSubtitleTracks = const [];
-  // External (Dart-parsed) subtitle tracks, added via addSubtitleTrack().
   final List<SubtitleTrack> _dartSubtitleTracks = [];
 
   // ── Subtitle display (SubtitleStreamSupport) ───────────────────────────────
-  // Cue lists keyed by URI, for Dart-parsed external subtitles.
   final _loadedSubtitles = <String, List<_SubCue>>{};
   List<_SubCue> _activeSubtitleCues = const [];
-  // When true, subtitle text comes from C# SubtitleUpdated callback (embedded).
-  // When false, it comes from the Dart position-based cue lookup (external).
+  // true = embedded via C# SubtitleUpdated; false = external Dart-parsed cues.
   bool _embeddedSubtitleActive = false;
-  // Stores the track that selectSubtitleTrack() wanted but couldn't activate
-  // because addSubtitleTrack() hadn't finished the HTTP fetch yet.
+  // Track requested before cues finished loading; activated once ready.
   SubtitleTrack? _pendingSubtitleTrack;
-  // Remembers the active track when sub-visibility:'no' hides it, so
-  // sub-visibility:'yes' can restore it (mirrors Android's _hiddenSubtitleTrackId).
+  // Track hidden by sub-visibility:'no'; restored on 'yes'.
   SubtitleTrack? _hiddenSubtitleTrack;
   Timer? _embeddedSubtitleClearTimer;
   final _subtitleTextCtrl = StreamController<String>.broadcast();
@@ -182,9 +174,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         _state = _state.copyWith(playing: isPlaying);
         playingController.add(isPlaying);
         if (isPlaying) {
-          // Fire on first play AND after every resume (mirrors mpv's
-          // playback-restart which fires after seeks too). TrackManager
-          // listens for this to clear waitingForExternalSubsTrackSelection.
           if (!_firstFrameFired) _firstFrameFired = true;
           playbackRestartController.add(null);
         }
@@ -255,7 +244,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     if (_disposed) return;
     _firstFrameFired = false;
 
-    // Reset track and subtitle state for the new media item.
     _capiAudioTracks = const [];
     _capiSubtitleTracks = const [];
     _dartSubtitleTracks.clear();
@@ -271,7 +259,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     _lastSubtitleText = '';
     if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add('');
 
-    // Reset state
     _state = const PlayerState();
     positionController.add(Duration.zero);
     durationController.add(Duration.zero);
@@ -401,12 +388,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
           }
         }
 
-      // Subtitle style properties (sub-font-size, sub-color, sub-bold, etc.)
-      // are not actionable without changes to the shared subtitle overlay widget.
-      // Silently ignore — the overlay uses hardcoded defaults.
-
-      // All other properties (sub-delay, audio-delay, glsl-shaders, etc.)
-      // are not implementable on Tizen — silently ignore.
+      // Subtitle style and all other mpv-specific properties: no-op on Tizen.
       default:
         break;
     }
@@ -505,8 +487,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       _loadedSubtitles[uri] = _parseSubtitle(content);
       appLogger.d('PlayerTizen: loaded ${_loadedSubtitles[uri]!.length} cues from $uri');
 
-      // Register this as an available subtitle track so the track selection
-      // system finds it in player.state.tracks.subtitle.
       final dartTrack = SubtitleTrack(
         id: 'external:$uri',
         title: title,
@@ -700,9 +680,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     }
   }
 
-  /// Fetches text content from a file:// or HTTP URI.
-  /// A 15-second timeout is applied to the connection and response so a stalled
-  /// network doesn't leave the subtitle load suspended indefinitely.
+  /// Fetches text from a file:// or HTTP URI (15s timeout).
   Future<String> _fetchText(String uri) async {
     if (uri.startsWith('file://')) {
       return File(uri.replaceFirst('file://', '')).readAsString();

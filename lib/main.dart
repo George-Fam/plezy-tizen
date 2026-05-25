@@ -237,11 +237,9 @@ Future<void> _bootstrapApp() async {
     unawaited(FullscreenStateManager().enterFullscreen());
   }
 
-  // Initialize gamepad service for all platforms except Tizen.
-  // universal_gamepad has no Tizen implementation and TV remote input is
-  // handled by Flutter key events.
-  // Otherwise, universal_gamepad auto-registers and intercepts input events,
-  // so we must listen to re-dispatch them
+  // Initialize gamepad service (all platforms — universal_gamepad auto-registers
+  // and intercepts input events, so we must listen to re-dispatch them).
+  // Tizen excluded: no universal_gamepad implementation, TV remote uses key events.
   if (!PlatformDetector.isTizen()) GamepadService.instance.start();
   if (PlatformDetector.isAppleTV()) {
     AppleTvRemoteTouchService.instance.start();

@@ -25,9 +25,7 @@ namespace Runner
             Window videoWindow = null;
             try
             {
-                // Create hidden — shown only when a video is opened so the
-                // ElmSharp window never steals keyboard focus from Flutter's
-                // DALi window. The player calls Show() via the open command.
+                // Hidden until a video opens to avoid stealing keyboard focus.
                 videoWindow = new Window("plezy-video");
                 var screenSize = Elementary.GetScreenSize();
                 videoWindow.Resize(screenSize.Width, screenSize.Height);

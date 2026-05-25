@@ -864,9 +864,7 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
         _backendSwitchedSubscription = currentPlayer.streams.backendSwitched.listen((_) => _onBackendSwitched());
       }
 
-      // On Tizen the ElmSharp video window intercepts key events before Flutter
-      // sees them. PlayerTizen relays navigation keys via the event channel;
-      // subscribe here to handle back navigation and d-pad from the video window.
+      // Tizen: back/d-pad keys are grabbed by the ElmSharp window and relayed here.
       if (currentPlayer is PlayerTizen) {
         _tizenNativeKeySubscription = currentPlayer.nativeKeyStream.listen(_onTizenNativeKey);
       }
@@ -985,9 +983,6 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
   // via the post-`playbackRestart` fallback. Prevents double-switching.
   bool _frameRateMatchingApplied = false;
 
-  /// Called when the ElmSharp video window intercepts a remote key and relays
-  /// it here via PlayerTizen.nativeKeyStream. Flutter never sees these keys
-  /// directly because the video window has Wayland keyboard focus.
   void _onTizenNativeKey(String keyName) {
     switch (keyName) {
       case 'XF86Back':
