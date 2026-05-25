@@ -16,22 +16,12 @@ namespace Runner
 
             // EFL window for video rendering, lowered beneath Flutter's DALi window so
             // video shows through the transparent hole left by VideoRectSupport.
-            Window videoWindow = null;
-            int screenWidth = 1920, screenHeight = 1080;
-            try
-            {
-                // Hidden until a video opens to avoid stealing keyboard focus.
-                videoWindow = new Window("plezy-video");
-                var screenSize = videoWindow.ScreenSize;
-                screenWidth = screenSize.Width;
-                screenHeight = screenSize.Height;
-                videoWindow.Resize(screenWidth, screenHeight);
-                Console.WriteLine($"[App] Video window created ({screenWidth}x{screenHeight})");
-            }
-            catch (Exception e)
-            {
-                Console.Error.WriteLine($"[App] Failed to create video window: {e.Message}");
-            }
+            Window videoWindow = new Window("plezy-video");
+            var screenSize = videoWindow.ScreenSize;
+            int screenWidth = screenSize.Width;
+            int screenHeight = screenSize.Height;
+            videoWindow.Resize(screenWidth, screenHeight);
+            Console.WriteLine($"[App] Video window created ({screenWidth}x{screenHeight})");
 
             _tizenPlayer = new TizenMediaPlayer(videoWindow);
             _tizenPlayer.Setup();
