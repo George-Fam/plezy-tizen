@@ -43,20 +43,25 @@ if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 	: "${TIZEN_AUTHOR_CERT_PASSWORD:?Missing TIZEN_AUTHOR_CERT_PASSWORD}"
 	: "${TIZEN_DIST_CERT_BASE64:?Missing TIZEN_DIST_CERT_BASE64}"
 	: "${TIZEN_DIST_CERT_PASSWORD:?Missing TIZEN_DIST_CERT_PASSWORD}"
-	CERT_DIR="$HOME/.tizen-studio/keystore/signing/$PROFILE_NAME"
+	# Resolve the SDK data directory from sdk.info (set at install time).
+	TIZEN_SDK_DATA_PATH="$(grep 'TIZEN_SDK_DATA_PATH' "$HOME/tizen-studio/sdk.info" | cut -d= -f2 | tr -d '[:space:]')"
+	: "${TIZEN_SDK_DATA_PATH:?Could not read TIZEN_SDK_DATA_PATH from sdk.info}"
+
+	CERT_DIR="$TIZEN_SDK_DATA_PATH/keystore/signing/$PROFILE_NAME"
 	mkdir -p "$CERT_DIR"
 
 	echo "$TIZEN_AUTHOR_CERT_BASE64" | base64 --decode >"$CERT_DIR/author.p12"
 	echo "$TIZEN_DIST_CERT_BASE64" | base64 --decode >"$CERT_DIR/distributor.p12"
 
-	PROFILES_DIR="$HOME/.tizen-studio-data/profile"
+	PROFILES_DIR="$TIZEN_SDK_DATA_PATH/profile"
 	mkdir -p "$PROFILES_DIR"
 
-	# Write the profile XML that Tizen Studio / flutter-tizen reads.
+	# Write the profile XML that flutter-tizen reads via sdkDataDirectory/profile/profiles.xml.
+	# The active= attribute is required: flutter-tizen reads it to select the signing profile.
 	# Passwords are stored in plain-text here; the file is 0600 and ephemeral in CI.
 	cat >"$PROFILES_DIR/profiles.xml" <<XML
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<profiles version="3.1">
+<profiles version="3.1" active="$PROFILE_NAME">
   <profile name="$PROFILE_NAME">
     <profileitem ca="" distributor="0" key="$CERT_DIR/author.p12" password="${TIZEN_AUTHOR_CERT_PASSWORD}" rootca=""/>
     <profileitem ca="" distributor="2" key="$CERT_DIR/distributor.p12" password="${TIZEN_DIST_CERT_PASSWORD}" rootca=""/>
@@ -64,7 +69,7 @@ if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 </profiles>
 XML
 	chmod 0600 "$PROFILES_DIR/profiles.xml"
-	tizen cli-config "profiles.path=$PROFILES_DIR/profiles.xml"
+	echo "Certificate profile written to $PROFILES_DIR/profiles.xml"
 fi
 
 flutter-tizen build tpk \
