@@ -14,7 +14,6 @@ import '../player_streams.dart';
 import '../subtitle_stream_support.dart';
 import '../video_rect_support.dart';
 
-// Parsed subtitle cue.
 typedef _SubCue = ({int startMs, int endMs, String text});
 
 /// Tizen TV player backend using a native C# hardware overlay (TizenMediaPlayer.cs).
@@ -38,12 +37,10 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   final _throttleSw = Stopwatch()..start();
   int _lastPositionEmitMs = 0;
 
-  // ── Track state ────────────────────────────────────────────────────────────
   List<AudioTrack> _capiAudioTracks = const [];
   List<SubtitleTrack> _capiSubtitleTracks = const [];
   final List<SubtitleTrack> _dartSubtitleTracks = [];
 
-  // ── Subtitle display (SubtitleStreamSupport) ───────────────────────────────
   final _loadedSubtitles = <String, List<_SubCue>>{};
   List<_SubCue> _activeSubtitleCues = const [];
   // true = embedded via C# SubtitleUpdated; false = external Dart-parsed cues.
@@ -60,7 +57,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   @override
   Stream<String> get subtitleTextStream => _subtitleTextCtrl.stream;
 
-  // Populated on 'initialized' event — exposed for the performance overlay.
+  // Populated on 'initialized' event, exposed for the performance overlay.
   int? videoWidth;
   int? videoHeight;
   String? videoCodec;
@@ -97,8 +94,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   @override
   bool get supportsSecondarySubtitles => false;
 
-  // ── Event handling ────────────────────────────────────────────────────────
-
   void _handleEvent(dynamic raw) {
     if (_disposed || raw is! Map) return;
     final map = raw.cast<String, dynamic>();
@@ -124,9 +119,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         decoderType = rawDecoder.isNotEmpty ? rawDecoder : null;
         final dur = Duration(milliseconds: durationMs);
 
-        // Parse audio tracks from Capi player enumeration.
         _capiAudioTracks = _parseCapiAudioTracks(map['audioTracks']);
-        // Parse embedded subtitle tracks.
         _capiSubtitleTracks = _parseCapiSubtitleTracks(map['embeddedSubtitleTracks']);
         _emitTracks();
 
@@ -178,7 +171,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       case 'buffering':
         final isBuffering = map['isBuffering'] as bool? ?? false;
         final percent = map['percent'] as int? ?? 0;
-        // Approximate buffer duration from percent × total duration.
+        // Approximate buffer duration from percent x total duration.
         final bufferDur = _state.duration > Duration.zero
             ? Duration(milliseconds: (_state.duration.inMilliseconds * percent / 100).round())
             : Duration.zero;
@@ -200,8 +193,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         errorController.add(PlayerError(msg));
     }
   }
-
-  // ── VideoRectSupport ──────────────────────────────────────────────────────
 
   /// Called by the Video widget on layout change; forwards physical-pixel rect to C#.
   @override
@@ -225,8 +216,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       appLogger.w('PlayerTizen: setVideoRect failed', error: e);
     }
   }
-
-  // ── Player interface ──────────────────────────────────────────────────────
 
   @override
   Future<void> open(
@@ -355,7 +344,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     }
   }
 
-  /// Cycle native display mode (0=stretch, 1=letterbox, 2=crop).
+  /// Cycle native display mode (0=contain, 1=cover, 2=fill).
   Future<void> setNativeDisplayMode(int mode) async {
     if (_disposed) return;
     try {
@@ -364,8 +353,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       appLogger.w('PlayerTizen: setDisplayMode failed', error: e);
     }
   }
-
-  // ── No-ops for mpv-specific features ─────────────────────────────────────
 
   @override
   Future<void> setProperty(String name, String value) async {
@@ -426,7 +413,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     _embeddedSubtitleClearTimer = null;
 
     if (track.id == 'no' || track.id == 'auto') {
-      // Off — clear both paths.
+      // Off: clear both paths.
       _embeddedSubtitleActive = false;
       _activeSubtitleCues = const [];
       _lastSubtitleText = '';
@@ -437,7 +424,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     }
 
     if (track.id.startsWith('capi_sub:')) {
-      // Embedded subtitle — let C# SubtitleUpdated drive the display.
+      // Embedded subtitle: let C# SubtitleUpdated drive the display.
       final index = int.tryParse(track.id.replaceFirst('capi_sub:', ''));
       _embeddedSubtitleActive = true;
       _activeSubtitleCues = const [];
@@ -459,7 +446,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       // External Dart-parsed subtitle.
       final cues = _loadedSubtitles[track.uri!];
       if (cues == null) {
-        // Cues not ready yet — addSubtitleTrack() is still fetching.
+        // Cues not ready yet; addSubtitleTrack() is still fetching.
         // Store as pending; it will be activated once loading completes.
         _pendingSubtitleTrack = track;
         appLogger.d('PlayerTizen: cues not ready for ${track.uri}, stored as pending');
@@ -564,8 +551,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   @override
   Future<void> abandonAudioFocus() async {}
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
-
   @override
   Future<void> dispose() async {
     if (_disposed) return;
@@ -580,8 +565,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     await _nativeKeyController.close();
     await closeStreamControllers();
   }
-
-  // ── Track helpers ─────────────────────────────────────────────────────────
 
   void _emitTracks() {
     final tracks = Tracks(audio: _capiAudioTracks, subtitle: [..._capiSubtitleTracks, ..._dartSubtitleTracks]);
@@ -649,8 +632,6 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     final targetMs = _activeSubtitleCues[targetIndex].startMs;
     seek(Duration(milliseconds: targetMs));
   }
-
-  // ── Subtitle helpers ──────────────────────────────────────────────────────
 
   /// Infers subtitle codec from URI file extension, stripping query params first.
   static String? _inferSubtitleCodec(String uri) {
