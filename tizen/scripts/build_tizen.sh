@@ -61,4 +61,5 @@ fi
 flutter-tizen build tpk \
 	$MODE \
 	--dart-define=TIZEN_BUILD=true \
+	--extra-front-end-options=--enable-experiment=private-named-parameters \
 	"${EXTRA_ARGS[@]}"

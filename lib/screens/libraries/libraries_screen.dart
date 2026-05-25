@@ -1570,7 +1570,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
 
     return ReorderableListView.builder(
       scrollController: _dialogScrollController,
-      onReorderItem: _reorderLibraries,
+      onReorder: _reorderLibraries,
       itemCount: _tempLibraries.length,
       padding: const EdgeInsets.symmetric(vertical: 8),
       buildDefaultDragHandles: false,
@@ -1600,7 +1600,7 @@ class _LibraryManagementSheetState extends State<_LibraryManagementSheet> {
 
     return ReorderableListView.builder(
       scrollController: scrollController,
-      onReorderItem: _reorderLibraries,
+      onReorder: _reorderLibraries,
       itemCount: _tempLibraries.length,
       padding: const EdgeInsets.symmetric(vertical: 8),
       buildDefaultDragHandles: false,
