@@ -65,8 +65,6 @@ namespace Runner
             eventChannel.SetStreamHandler(this);
         }
 
-        // ── Method channel handler ───────────────────────────────────────────
-
         private async Task<object> HandleMethodCall(MethodCall call)
         {
             // Flutter's StandardMethodCodec serializes Dart Maps as Hashtable on C#.
@@ -130,8 +128,6 @@ namespace Runner
                     throw new MissingPluginException();
             }
         }
-
-        // ── Open ─────────────────────────────────────────────────────────────
 
         private async Task OpenAsync(System.Collections.IDictionary args)
         {
@@ -336,8 +332,6 @@ namespace Runner
             }
         }
 
-        // ── Track selection ──────────────────────────────────────────────────
-
         private void SelectAudioTrack(int index)
         {
             try { _player.AudioTrackInfo.Selected = index; }
@@ -349,8 +343,6 @@ namespace Runner
             try { _player.SubtitleTrackInfo.Selected = index; }
             catch (Exception e) { Log($"SelectSubtitleTrack failed: {e.Message}", isError: true); }
         }
-
-        // ── Visibility ───────────────────────────────────────────────────────
 
         private void SetVisible(bool visible)
         {
@@ -370,8 +362,6 @@ namespace Runner
             }
             catch (Exception e) { Log($"SetVisible failed: {e.Message}", isError: true); }
         }
-
-        // ── Position timer ───────────────────────────────────────────────────
 
         private void OnPositionTick(object source, ElapsedEventArgs e)
         {
@@ -394,8 +384,6 @@ namespace Runner
                 catch { }
             });
         }
-
-        // ── Playback control ─────────────────────────────────────────────────
 
         private void Play()
         {
@@ -545,8 +533,6 @@ namespace Runner
             catch (Exception e) { Log($"{e.Message}", isError: true); }
         }
 
-        // ── Helpers ──────────────────────────────────────────────────────────
-
         private static IDictionary<string, object> ErrorEvent(string code, string message)
             => new Dictionary<string, object>
             {
@@ -554,7 +540,6 @@ namespace Runner
                 ["code"] = code,
                 ["message"] = message,
             };
-
 
         // Marshals action to the EFL main thread (native callbacks and timer ticks
         // run on the thread pool; Flutter channel calls must be on the main thread).
@@ -595,8 +580,6 @@ namespace Runner
             else Console.WriteLine($"[TizenPlayer] {message}");
         }
 
-        // ── IEventStreamHandler ──────────────────────────────────────────────
-
         public void OnListen(object arguments, IEventSink events)
         {
             _eventSink = events;
@@ -606,8 +589,6 @@ namespace Runner
         {
             _eventSink = null;
         }
-
-        // ── Lifecycle ────────────────────────────────────────────────────────
 
         private void DisposePlayer()
         {
