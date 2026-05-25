@@ -20,7 +20,7 @@ class VideoControlsPlaybackExtrasLoader {
     }
 
     try {
-      appLogger.i('_loadPlaybackExtras: starting for ${metadata.id} (forceRefresh=$forceRefresh)');
+      appLogger.d('_loadPlaybackExtras: starting for ${metadata.id} (forceRefresh=$forceRefresh)');
       final settings = await SettingsService.getInstance();
       final extras = await client!.fetchPlaybackExtras(
         metadata.id,
@@ -29,7 +29,7 @@ class VideoControlsPlaybackExtrasLoader {
         forceChapterFallback: settings.read(SettingsService.forceSkipMarkerFallback),
         forceRefresh: forceRefresh,
       );
-      appLogger.i('_loadPlaybackExtras: got ${extras.chapters.length} chapters, ${extras.markers.length} markers');
+      appLogger.d('_loadPlaybackExtras: got ${extras.chapters.length} chapters');
       return extras;
     } catch (e, stack) {
       appLogger.d('_loadPlaybackExtras: network path failed, trying cache fallback');
