@@ -22,7 +22,7 @@ PROFILE_NAME="tizen_signing"
 # Sync tizen-manifest.xml version from pubspec.yaml (e.g. "2.2.0+100" -> "2.2.0").
 PUBSPEC_VERSION="$(grep '^version:' "$REPO_ROOT/pubspec.yaml" | sed 's/version:[[:space:]]*//' | sed 's/+.*//' | tr -d '[:space:]')"
 if [[ -n "$PUBSPEC_VERSION" ]]; then
-	sed -i "s/version=\"[^\"]*\"/version=\"$PUBSPEC_VERSION\"/" "$REPO_ROOT/tizen/tizen-manifest.xml"
+	sed -i "s/\(<manifest[^>]*version=\"\)[^\"]*\"/\1$PUBSPEC_VERSION\"/" "$REPO_ROOT/tizen/tizen-manifest.xml"
 	echo "Tizen manifest version set to $PUBSPEC_VERSION"
 fi
 
