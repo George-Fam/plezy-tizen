@@ -38,7 +38,7 @@ namespace Runner
 
         private object Respond(string method)
         {
-            // Boolean queries — TV is always fullscreen, maximized, focused, visible.
+            // Boolean queries: TV is always fullscreen, maximized, focused, visible.
             if (method == "isFullScreen") return true;
             if (method == "isMaximized") return true;
             if (method == "isFocused") return true;
@@ -56,13 +56,13 @@ namespace Runner
             if (method == "getTitleBarHeight") return 0;
             if (method == "getTitle") return "Plezy";
 
-            // Size/position — queried from the actual screen at startup.
+            // Size/position, queried from the actual screen at startup.
             if (method == "getSize")
                 return new Hashtable { { "width", (double)_screenWidth }, { "height", (double)_screenHeight } };
             if (method == "getPosition")
                 return new Hashtable { { "x", 0.0 }, { "y", 0.0 } };
 
-            // Everything else — setters, listeners, close, destroy — are no-ops.
+            // Everything else (setters, listeners, close, destroy) are no-ops.
             return null;
         }
     }
