@@ -4,12 +4,12 @@ import '../../media/media_display_criteria.dart';
 import '../../utils/platform_detector.dart';
 import '../models.dart';
 import 'platform/player_android.dart';
-import 'platform/player_linux.dart';
-import 'platform/player_tizen.dart';
-import 'platform/player_windows.dart';
 import 'player_native.dart';
 import 'player_state.dart';
 import 'player_streams.dart';
+import 'platform/player_linux.dart';
+import 'platform/player_tizen.dart';
+import 'platform/player_windows.dart';
 
 export 'player_base.dart';
 
