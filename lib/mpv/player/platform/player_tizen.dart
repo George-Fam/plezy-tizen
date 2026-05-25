@@ -135,8 +135,10 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         seekableController.add(true);
         bufferingController.add(false);
         if (width > 0 && height > 0) {
-          appLogger.d('PlayerTizen: initialized ${width}x$height dur=${durationMs}ms '
-              'audio=${_capiAudioTracks.length} sub=${_capiSubtitleTracks.length}');
+          appLogger.d(
+            'PlayerTizen: initialized ${width}x$height dur=${durationMs}ms '
+            'audio=${_capiAudioTracks.length} sub=${_capiSubtitleTracks.length}',
+          );
         }
 
       case 'subtitle':
@@ -582,10 +584,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   // ── Track helpers ─────────────────────────────────────────────────────────
 
   void _emitTracks() {
-    final tracks = Tracks(
-      audio: _capiAudioTracks,
-      subtitle: [..._capiSubtitleTracks, ..._dartSubtitleTracks],
-    );
+    final tracks = Tracks(audio: _capiAudioTracks, subtitle: [..._capiSubtitleTracks, ..._dartSubtitleTracks]);
     _state = _state.copyWith(tracks: tracks);
     tracksController.add(tracks);
   }
@@ -598,11 +597,13 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       final map = Map<String, dynamic>.from(item);
       final index = map['index'] as int? ?? result.length;
       final lang = map['language'] as String? ?? '';
-      result.add(AudioTrack(
-        id: 'capi_audio:$index',
-        title: lang.isNotEmpty ? lang : 'Track ${index + 1}',
-        language: lang.isNotEmpty ? lang : null,
-      ));
+      result.add(
+        AudioTrack(
+          id: 'capi_audio:$index',
+          title: lang.isNotEmpty ? lang : 'Track ${index + 1}',
+          language: lang.isNotEmpty ? lang : null,
+        ),
+      );
     }
     return result;
   }
@@ -615,11 +616,13 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       final map = Map<String, dynamic>.from(item);
       final index = map['index'] as int? ?? result.length;
       final lang = map['language'] as String? ?? '';
-      result.add(SubtitleTrack(
-        id: 'capi_sub:$index',
-        title: lang.isNotEmpty ? lang : 'Subtitle ${index + 1}',
-        language: lang.isNotEmpty ? lang : null,
-      ));
+      result.add(
+        SubtitleTrack(
+          id: 'capi_sub:$index',
+          title: lang.isNotEmpty ? lang : 'Subtitle ${index + 1}',
+          language: lang.isNotEmpty ? lang : null,
+        ),
+      );
     }
     return result;
   }
@@ -681,9 +684,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     }
     final client = HttpClient();
     try {
-      final request = await client
-          .getUrl(Uri.parse(uri))
-          .timeout(const Duration(seconds: 15));
+      final request = await client.getUrl(Uri.parse(uri)).timeout(const Duration(seconds: 15));
       final response = await request.close().timeout(const Duration(seconds: 15));
       final bytes = <int>[];
       await for (final chunk in response) {
@@ -705,9 +706,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   List<_SubCue> _parseSrt(String content) {
     final cues = <_SubCue>[];
     final lines = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
-    final timingRe = RegExp(
-      r'(\d{1,2}):(\d{2}):(\d{2})[,.:](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.:](\d{3})',
-    );
+    final timingRe = RegExp(r'(\d{1,2}):(\d{2}):(\d{2})[,.:](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.:](\d{3})');
     int i = 0;
     while (i < lines.length) {
       while (i < lines.length && lines[i].trim().isEmpty) i++;
@@ -716,7 +715,10 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       if (RegExp(r'^\d+$').hasMatch(lines[i].trim())) i++;
       if (i >= lines.length) break;
       final m = timingRe.firstMatch(lines[i]);
-      if (m == null) { i++; continue; }
+      if (m == null) {
+        i++;
+        continue;
+      }
       final startMs = _tsToMs(m, 1);
       final endMs = _tsToMs(m, 5);
       i++;
@@ -737,9 +739,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     final cues = <_SubCue>[];
     final lines = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
     // VTT timestamps use '.' as ms separator; same regex handles both ',' and '.'
-    final timingRe = RegExp(
-      r'(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})',
-    );
+    final timingRe = RegExp(r'(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})');
     int i = 0;
     while (i < lines.length && !lines[i].contains('-->')) i++;
     while (i < lines.length) {

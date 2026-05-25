@@ -18,8 +18,7 @@ class MediaControlsManager {
   static final bool _supported = !PlatformDetector.isTizen();
 
   /// Stream of control events from OS media controls
-  Stream<MediaControlEvent> get controlEvents =>
-      _supported ? OsMediaControls.controlEvents : const Stream.empty();
+  Stream<MediaControlEvent> get controlEvents => _supported ? OsMediaControls.controlEvents : const Stream.empty();
 
   /// Throttled playback state update (1 second interval, leading + trailing)
   late final Throttle _throttledUpdate;

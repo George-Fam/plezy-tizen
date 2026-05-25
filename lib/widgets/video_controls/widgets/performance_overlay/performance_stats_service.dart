@@ -253,9 +253,7 @@ class PerformanceStatsService {
         videoWidth: tizenPlayer.videoWidth,
         videoHeight: tizenPlayer.videoHeight,
         audioSamplerate: tizenPlayer.audioSampleRate,
-        audioChannels: tizenPlayer.audioChannels != null
-            ? '${tizenPlayer.audioChannels} ch'
-            : null,
+        audioChannels: tizenPlayer.audioChannels != null ? '${tizenPlayer.audioChannels} ch' : null,
         hwdecCurrent: tizenPlayer.decoderType == 'Hardware' ? 'tizen-hw' : 'no',
         cacheDuration: state.buffer != Duration.zero ? state.buffer.inMilliseconds / 1000.0 : null,
         appMemoryBytes: appMemory,

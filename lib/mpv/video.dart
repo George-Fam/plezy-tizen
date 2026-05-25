@@ -64,8 +64,7 @@ class _VideoState extends State<Video> {
 
           // Subtitle overlay for players that stream subtitle text to Flutter
           // (e.g. PlayerTizen, where the video renders in a native overlay window)
-          if (widget.player is SubtitleStreamSupport)
-            _SubtitleOverlay(player: widget.player as SubtitleStreamSupport),
+          if (widget.player is SubtitleStreamSupport) _SubtitleOverlay(player: widget.player as SubtitleStreamSupport),
 
           // Controls overlay
           if (widget.controls != null) widget.controls!(context),
