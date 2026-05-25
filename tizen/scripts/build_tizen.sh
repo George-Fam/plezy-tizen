@@ -64,6 +64,7 @@ if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 </profiles>
 XML
 	chmod 0600 "$PROFILES_DIR/profiles.xml"
+	tizen cli-config "profiles.path=$PROFILES_DIR/profiles.xml"
 fi
 
 flutter-tizen build tpk \
