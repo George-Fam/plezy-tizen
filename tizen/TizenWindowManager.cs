@@ -19,7 +19,7 @@ namespace Runner
 
         public TizenWindowManager()
         {
-            var size = Elementary.GetScreenSize();
+            var size = Elementary.ScreenSize;
             _screenWidth = size.Width;
             _screenHeight = size.Height;
         }

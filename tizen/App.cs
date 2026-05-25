@@ -21,7 +21,7 @@ namespace Runner
             {
                 // Hidden until a video opens to avoid stealing keyboard focus.
                 videoWindow = new Window("plezy-video");
-                var screenSize = Elementary.GetScreenSize();
+                var screenSize = Elementary.ScreenSize;
                 videoWindow.Resize(screenSize.Width, screenSize.Height);
                 Console.WriteLine($"[App] Video window created ({screenSize.Width}x{screenSize.Height})");
             }
