@@ -68,6 +68,8 @@ if [[ -n "${TIZEN_AUTHOR_CERT_BASE64:-}" ]]; then
 	echo "Certificate profile '$PROFILE_NAME' registered via tizen security-profiles"
 fi
 
+# Uses experimental flag because 3.41.9 (latest flutter-tizen) ships with a
+# Dart version that requires it for private named parameters support.
 flutter-tizen build tpk \
 	$MODE \
 	--dart-define=TIZEN_BUILD=true \
