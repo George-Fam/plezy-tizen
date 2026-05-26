@@ -62,11 +62,9 @@ jobs:
           find lib $([ -d test ] && echo test) -name "*.dart" ! -name "*.g.dart" ! -name "*.freezed.dart" -type f 2>/dev/null -print0 | xargs -0 dart format --output=none --set-exit-if-changed
       - name: Analyze code
         run: |
-          # Using dart analyze instead of flutter analyze: sdk minimum is pinned to
-          # >=3.11.0 for flutter-tizen 3.41.9 compatibility; dart analyze enables
-          # private-named-parameters by default regardless of pubspec constraint.
-          # Revert to flutter analyze once flutter-tizen ships a Dart 3.12 build.
-          dart analyze 2>&1 | tee analyze_output.txt || true
+          # Run flutter analyze
+          # Fails on errors or warnings only (info messages are allowed)
+          flutter analyze 2>&1 | tee analyze_output.txt || true
 
           # Check output for errors or warnings
           if grep -q "error •" analyze_output.txt; then

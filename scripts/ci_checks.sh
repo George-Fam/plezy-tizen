@@ -91,13 +91,10 @@ else
 fi
 rm -f "$out"
 
-# 3. dart analyze (mirrors ci.yml "Analyze code")
-# Using dart analyze instead of flutter analyze: sdk minimum is pinned to >=3.11.0
-# for flutter-tizen 3.41.9 compatibility; dart analyze enables private-named-parameters
-# by default regardless of pubspec constraint. Revert once flutter-tizen ships Dart 3.12.
-section "dart analyze"
+# 3. flutter analyze (mirrors ci.yml "Analyze code")
+section "flutter analyze"
 out="$(mktemp)"
-dart analyze >"$out" 2>&1 || true
+flutter analyze >"$out" 2>&1 || true
 if grep -q "error •" "$out"; then
   fail "errors"
   grep -E "error •|warning •" "$out" | sed 's/^/    /'
