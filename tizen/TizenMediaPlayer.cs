@@ -158,8 +158,8 @@ namespace Runner
                     // to Flutter's DALi window (which has Wayland keyboard focus).
                     SetEmptyInputRegion();
 
-                    // KeyGrab captures XF86Back/Back exclusively (privileged TV keys the system
-                    // intercepts before Wayland) and relays them to Flutter via the event channel.
+                    // KeyGrab captures privileged TV keys the system intercepts before Wayland
+                    // and relays them to Flutter via the event channel.
                     _videoWindow.KeyGrab("XF86Back", false);
                     _videoWindow.KeyGrab("Back", false);
                     _videoWindow.KeyDown += OnVideoWindowKeyDown;

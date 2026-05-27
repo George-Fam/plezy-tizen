@@ -50,12 +50,26 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   // Track hidden by sub-visibility:'no'; restored on 'yes'.
   SubtitleTrack? _hiddenSubtitleTrack;
   Timer? _embeddedSubtitleClearTimer;
+  Timer? _embeddedSubtitleDelayTimer;
   final _subtitleTextCtrl = StreamController<String>.broadcast();
   StreamSubscription<Duration>? _subtitlePositionSub;
   String _lastSubtitleText = '';
+  // Sub-delay in milliseconds. Positive = subtitles appear later.
+  int _subDelayMs = 0;
+
+  // Secondary subtitle state (Dart-parsed external only; Capi supports one embedded track).
+  final _secondarySubtitleTextCtrl = StreamController<String>.broadcast();
+  List<_SubCue> _secondaryActiveSubtitleCues = const [];
+  StreamSubscription<Duration>? _secondarySubtitlePositionSub;
+  SubtitleTrack? _pendingSecondarySubtitleTrack;
+  String _lastSecondarySubtitleText = '';
+  int _secondarySubDelayMs = 0;
 
   @override
   Stream<String> get subtitleTextStream => _subtitleTextCtrl.stream;
+
+  @override
+  Stream<String> get secondarySubtitleTextStream => _secondarySubtitleTextCtrl.stream;
 
   // Populated on 'initialized' event, exposed for the performance overlay.
   int? videoWidth;
@@ -92,7 +106,7 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   String get playerType => 'tizen';
 
   @override
-  bool get supportsSecondarySubtitles => false;
+  bool get supportsSecondarySubtitles => true;
 
   void _handleEvent(dynamic raw) {
     if (_disposed || raw is! Map) return;
@@ -140,13 +154,32 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         final text = map['text'] as String? ?? '';
         final durationMs2 = map['durationMs'] as int? ?? 3000;
         _embeddedSubtitleClearTimer?.cancel();
-        _lastSubtitleText = text;
-        if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add(text);
-        if (text.isNotEmpty) {
-          _embeddedSubtitleClearTimer = Timer(Duration(milliseconds: durationMs2), () {
-            _lastSubtitleText = '';
-            if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add('');
+        _embeddedSubtitleDelayTimer?.cancel();
+        // Apply positive sub-delay via timer; negative delay is not feasible without
+        // buffering future events, so emit immediately in that case.
+        if (_subDelayMs > 0) {
+          _embeddedSubtitleDelayTimer = Timer(Duration(milliseconds: _subDelayMs), () {
+            // Guard: if the track was switched or subs turned off during the delay,
+            // discard the stale text rather than overwriting the new track's display.
+            if (!_embeddedSubtitleActive || _disposed) return;
+            _lastSubtitleText = text;
+            if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add(text);
+            if (text.isNotEmpty) {
+              _embeddedSubtitleClearTimer = Timer(Duration(milliseconds: durationMs2), () {
+                _lastSubtitleText = '';
+                if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add('');
+              });
+            }
           });
+        } else {
+          _lastSubtitleText = text;
+          if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add(text);
+          if (text.isNotEmpty) {
+            _embeddedSubtitleClearTimer = Timer(Duration(milliseconds: durationMs2), () {
+              _lastSubtitleText = '';
+              if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add('');
+            });
+          }
         }
 
       case 'position':
@@ -239,10 +272,21 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     _hiddenSubtitleTrack = null;
     _embeddedSubtitleClearTimer?.cancel();
     _embeddedSubtitleClearTimer = null;
+    _embeddedSubtitleDelayTimer?.cancel();
+    _embeddedSubtitleDelayTimer = null;
     _subtitlePositionSub?.cancel();
     _subtitlePositionSub = null;
     _lastSubtitleText = '';
+    _subDelayMs = 0;
     if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add('');
+    // Reset secondary subtitle state.
+    _secondaryActiveSubtitleCues = const [];
+    _secondarySubtitlePositionSub?.cancel();
+    _secondarySubtitlePositionSub = null;
+    _pendingSecondarySubtitleTrack = null;
+    _lastSecondarySubtitleText = '';
+    _secondarySubDelayMs = 0;
+    if (!_secondarySubtitleTextCtrl.isClosed) _secondarySubtitleTextCtrl.add('');
 
     _state = const PlayerState();
     positionController.add(Duration.zero);
@@ -357,6 +401,16 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   @override
   Future<void> setProperty(String name, String value) async {
     switch (name) {
+      // Sub-delay: shift subtitle timing in milliseconds.
+      // Positive = subtitles appear later, negative = earlier.
+      // Dart-parsed cues apply the offset in _onSubtitlePosition.
+      // Embedded (C# driven) subs support positive delay via Timer.
+      case 'sub-delay':
+        _subDelayMs = ((double.tryParse(value) ?? 0.0) * 1000).round();
+
+      case 'sub-delay2':
+        _secondarySubDelayMs = ((double.tryParse(value) ?? 0.0) * 1000).round();
+
       // sub-visibility mirrors Android's _hiddenSubtitleTrackId pattern:
       // 'no' remembers and hides the current track; 'yes' restores it.
       case 'sub-visibility':
@@ -411,6 +465,8 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     _subtitlePositionSub = null;
     _embeddedSubtitleClearTimer?.cancel();
     _embeddedSubtitleClearTimer = null;
+    _embeddedSubtitleDelayTimer?.cancel();
+    _embeddedSubtitleDelayTimer = null;
 
     if (track.id == 'no' || track.id == 'auto') {
       // Off: clear both paths.
@@ -461,7 +517,44 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
   }
 
   @override
-  Future<void> selectSecondarySubtitleTrack(SubtitleTrack track) async {}
+  Future<void> selectSecondarySubtitleTrack(SubtitleTrack track) async {
+    _secondarySubtitlePositionSub?.cancel();
+    _secondarySubtitlePositionSub = null;
+
+    if (track.id == 'no' || track.id == 'auto') {
+      _secondaryActiveSubtitleCues = const [];
+      _lastSecondarySubtitleText = '';
+      if (!_secondarySubtitleTextCtrl.isClosed) _secondarySubtitleTextCtrl.add('');
+      _state = _state.copyWith(track: _state.track.copyWith(secondarySubtitle: track));
+      trackController.add(_state.track);
+      return;
+    }
+
+    if (track.id.startsWith('capi_sub:')) {
+      // Capi only supports one embedded text track; secondary embedded is not possible.
+      // Still update state so the UI reflects the rejection (shows track as deselected).
+      appLogger.w('PlayerTizen: secondary embedded subtitle not supported; use an external track');
+      _secondaryActiveSubtitleCues = const [];
+      _lastSecondarySubtitleText = '';
+      if (!_secondarySubtitleTextCtrl.isClosed) _secondarySubtitleTextCtrl.add('');
+      _state = _state.copyWith(track: _state.track.copyWith(secondarySubtitle: SubtitleTrack.off));
+      trackController.add(_state.track);
+      return;
+    }
+
+    if (track.isExternal && track.uri != null) {
+      final cues = _loadedSubtitles[track.uri!];
+      if (cues == null) {
+        _pendingSecondarySubtitleTrack = track;
+        appLogger.d('PlayerTizen: secondary cues not ready for ${track.uri}, stored as pending');
+        return;
+      }
+      _secondaryActiveSubtitleCues = cues;
+      _secondarySubtitlePositionSub = _streams.position.listen(_onSecondarySubtitlePosition);
+      _state = _state.copyWith(track: _state.track.copyWith(secondarySubtitle: track));
+      trackController.add(_state.track);
+    }
+  }
 
   @override
   Future<void> addSubtitleTrack({required String uri, String? title, String? language, bool select = false}) async {
@@ -504,6 +597,19 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
         _state = _state.copyWith(track: _state.track.copyWith(subtitle: pending));
         trackController.add(_state.track);
         appLogger.d('PlayerTizen: auto-activated pending subtitle $uri');
+      }
+
+      // If selectSecondarySubtitleTrack was called while this URI was still loading,
+      // activate it now that cues are ready.
+      final pendingSecondary = _pendingSecondarySubtitleTrack;
+      if (pendingSecondary != null && pendingSecondary.uri == uri) {
+        _pendingSecondarySubtitleTrack = null;
+        _secondaryActiveSubtitleCues = _loadedSubtitles[uri]!;
+        _secondarySubtitlePositionSub?.cancel();
+        _secondarySubtitlePositionSub = _streams.position.listen(_onSecondarySubtitlePosition);
+        _state = _state.copyWith(track: _state.track.copyWith(secondarySubtitle: pendingSecondary));
+        trackController.add(_state.track);
+        appLogger.d('PlayerTizen: auto-activated pending secondary subtitle $uri');
       }
     } catch (e) {
       appLogger.w('PlayerTizen: failed to load subtitle from $uri', error: e);
@@ -556,8 +662,11 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     if (_disposed) return;
     _disposed = true;
     _embeddedSubtitleClearTimer?.cancel();
+    _embeddedSubtitleDelayTimer?.cancel();
     await _subtitlePositionSub?.cancel();
     await _subtitleTextCtrl.close();
+    await _secondarySubtitlePositionSub?.cancel();
+    await _secondarySubtitleTextCtrl.close();
     await _eventSub?.cancel();
     try {
       await _method.invokeMethod<void>('dispose');
@@ -599,13 +708,10 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
       final map = Map<String, dynamic>.from(item);
       final index = map['index'] as int? ?? result.length;
       final lang = map['language'] as String? ?? '';
-      result.add(
-        SubtitleTrack(
-          id: 'capi_sub:$index',
-          title: lang.isNotEmpty ? lang : 'Subtitle ${index + 1}',
-          language: lang.isNotEmpty ? lang : null,
-        ),
-      );
+      // Only set language, not title, to avoid "en · EN" duplication in the label.
+      // buildSubtitleLabel will display "EN" from the language code, falling back
+      // to "Subtitle N" when the language is absent.
+      result.add(SubtitleTrack(id: 'capi_sub:$index', title: null, language: lang.isNotEmpty ? lang : null));
     }
     return result;
   }
@@ -644,7 +750,9 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
 
   void _onSubtitlePosition(Duration pos) {
     if (_activeSubtitleCues.isEmpty) return;
-    final posMs = pos.inMilliseconds;
+    // Shift playback position by delay: positive delay makes subs appear later
+    // (we look further back in the cue list relative to current position).
+    final posMs = pos.inMilliseconds - _subDelayMs;
     String text = '';
     for (final cue in _activeSubtitleCues) {
       if (posMs >= cue.startMs && posMs < cue.endMs) {
@@ -655,6 +763,22 @@ class PlayerTizen with PlayerStreamControllersMixin implements Player, VideoRect
     if (text != _lastSubtitleText) {
       _lastSubtitleText = text;
       if (!_subtitleTextCtrl.isClosed) _subtitleTextCtrl.add(text);
+    }
+  }
+
+  void _onSecondarySubtitlePosition(Duration pos) {
+    if (_secondaryActiveSubtitleCues.isEmpty) return;
+    final posMs = pos.inMilliseconds - _secondarySubDelayMs;
+    String text = '';
+    for (final cue in _secondaryActiveSubtitleCues) {
+      if (posMs >= cue.startMs && posMs < cue.endMs) {
+        text = cue.text;
+        break;
+      }
+    }
+    if (text != _lastSecondarySubtitleText) {
+      _lastSecondarySubtitleText = text;
+      if (!_secondarySubtitleTextCtrl.isClosed) _secondarySubtitleTextCtrl.add(text);
     }
   }
 

@@ -113,6 +113,11 @@ extension _PlexVideoControlsKeyEventMethods on _PlexVideoControlsState {
       }
     }
 
+    // Tizen: EFL video window holds Wayland keyboard focus, so Focus.onKeyEvent
+    // misses navigation keys even when _focusNode appears focused. All handling
+    // is delegated to the Tizen-specific part file.
+    if (PlatformDetector.isTizen()) return handleTizenGlobalKeyEvent(event);
+
     // Only handle when video player navigation is disabled (desktop mode without D-pad nav)
     if (_videoPlayerNavigationEnabled) return false;
 
