@@ -1,9 +1,9 @@
 <h1>
-  <img src="assets/plezy.png" alt="Plezy Logo" height="24" style="vertical-align: middle;" />
-  Plezy
+  <img src="assets/plezy.png" alt="plezy-tizen Logo" height="24" style="vertical-align: middle;" />
+  plezy-tizen
 </h1>
 
-A modern client for Plex and Jellyfin on desktop, mobile, and TV. Built with Flutter for native performance and a clean interface.
+A Tizen-focused fork of Plezy for Plex and Jellyfin on TV, with the same desktop and mobile experience where supported. Built with Flutter for native performance and a clean interface.
 
 <p>
   <a href="https://plezy.app">Website</a> ·
@@ -14,7 +14,7 @@ A modern client for Plex and Jellyfin on desktop, mobile, and TV. Built with Flu
 </p>
 
 <p align="center">
-  <img src="assets/readme-showcase.webp" alt="Plezy mobile screenshots" width="900" />
+  <img src="assets/readme-showcase.webp" alt="plezy-tizen mobile screenshots" width="900" />
 </p>
 
 ## Download
@@ -89,7 +89,7 @@ Package managers:
 ### <img src="assets/readme_icons/integrations.svg" height="20" alt="" align="center" /> Integrations
 - Discord Rich Presence[^7]
 - Trakt, MyAnimeList, AniList, and Simkl tracking & rating
-- Plezy Remote — control desktop and TV from mobile
+- plezy-tizen Remote — control desktop and TV from mobile
 - Watch Next row[^6]
 
 ### <img src="assets/readme_icons/customization.svg" height="20" alt="" align="center" /> Platform & Customization
@@ -116,8 +116,8 @@ Package managers:
 ### Setup
 
 ```bash
-git clone https://github.com/edde746/plezy.git
-cd plezy
+git clone https://github.com/George-Fam/plezy-tizen.git
+cd plezy-tizen
 flutter pub get
 scripts/codegen.sh
 flutter run
@@ -149,13 +149,80 @@ To install the same pre-commit checks locally:
 scripts/setup_hooks.sh
 ```
 
+## Building for Tizen TV
+
+### Prerequisites
+
+- [flutter-tizen](https://github.com/flutter-tizen/flutter-tizen) — wraps the Flutter SDK with the Tizen toolchain. Clone it and add `flutter-tizen/bin` to your `PATH`.
+- [Tizen Studio CLI](https://developer.tizen.org/development/tizen-studio/download) with the following packages (install via `package-manager-cli.bin`):
+  - `NativeToolchain-Gcc-9.2`
+  - `IOT-Headed-6.0-NativeAppDevelopment`
+- A Samsung Smart TV running Tizen 6.0 or later, on the same network as your computer.
+
+### 1. Enable Developer Mode on your TV
+
+1. On your TV, navigate to **Apps**.
+2. Using the remote, press `1` `2` `3` `4` `5` — a **Developer Mode** dialog appears.
+3. Toggle **Developer Mode** to **On**.
+4. Enter your **computer's IP address** in the IP field.
+5. Select **OK** and restart the TV.
+
+After the restart a "Developer Mode" banner appears at the top of the home screen — this confirms the mode is active.
+
+### 2. Connect via SDB
+
+`sdb` (Smart Development Bridge, analogous to `adb`) ships with Tizen Studio under `~/tizen-studio/tools/`. Add it to your `PATH`, then:
+
+```bash
+sdb connect <tv-ip>
+sdb devices          # your TV should appear as "device"
+```
+
+### 3. Set up a signing certificate
+
+A TPK must be signed before it can be installed. In Tizen Studio:
+
+1. Open **Tools > Certificate Manager**.
+2. Click **+** and choose **Samsung** as the certificate type (requires a Samsung account).
+3. Complete the wizard — this creates an author and distributor certificate pair stored under `~/tizen-studio-data/keystore/`.
+
+The build script picks up your active Tizen Studio profile automatically; no extra configuration is needed for local builds.
+
+### 4. Build the TPK
+
+```bash
+./tizen/scripts/build_tizen.sh
+```
+
+The signed TPK is written to `build/tizen/tpk/`.
+
+To build manually:
+
+```bash
+flutter-tizen build tpk --release --dart-define=TIZEN_BUILD=true
+```
+
+### 5. Install to your TV
+
+```bash
+tizen install -n build/tizen/tpk/*.tpk -t <device-id>
+```
+
+`<device-id>` is the identifier shown by `sdb devices` (e.g. `192.168.1.100:26101`).
+
+For a faster dev loop with hot restart:
+
+```bash
+flutter-tizen run --debug -d <tv-ip> --dart-define=TIZEN_BUILD=true
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, formatting, tests, and translation guidelines.
 
 ## License
 
-Plezy is licensed under [GPL-3.0](LICENSE).
+plezy-tizen is licensed under [GPL-3.0](LICENSE), with modifications Copyright (C) 2026 George Fam.
 
 ## Acknowledgments
 
